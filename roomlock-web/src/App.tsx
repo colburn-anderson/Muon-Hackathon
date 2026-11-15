@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Routes, Route, Link, NavLink, useParams } from 'react-router-dom';
 import { Authenticator } from '@aws-amplify/ui-react';
-import { api, SLOT, toSlot, USING_MOCK, type ChatMessage, type Reservation, type Room, type RoomState } from './api';
+import {
+  api,
+  isAdmin,
+  SLOT,
+  toSlot,
+  USING_MOCK,
+  type AdminView,
+  type ChatMessage,
+  type Reservation,
+  type Room,
+  type RoomState,
+} from './api';
 import './App.css';
 
 /* ---------- helpers ---------- */
@@ -203,7 +214,9 @@ function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => 
   );
 }
 
-function RoomPage() {
+// checkout: the page the room's second QR opens, /r/:roomId/checkout. It only offers ending
+// your session, so scanning it on the way out is one tap.
+function RoomPage({ checkout = false }: { checkout?: boolean }) {
   const { roomId = '' } = useParams();
   const [room, setRoom] = useState<Room | null>(null);
   const [note, setNote] = useState<Note | null>(null);
@@ -237,7 +250,7 @@ function RoomPage() {
   const inUse = room.state === 'held' || room.state === 'warn';
   return (
     <>
-      <Link to="/" className="back">
+      <Link to="/rooms" className="back">
         ← All rooms
       </Link>
       <section className="hero">
@@ -253,7 +266,7 @@ function RoomPage() {
       </section>
 
       <div className="actions">
-        {room.state === 'free' && (
+        {!checkout && room.state === 'free' && (
           <button
             className="btn primary big"
             disabled={busy}
@@ -262,7 +275,7 @@ function RoomPage() {
             Claim this room
           </button>
         )}
-        {room.state === 'reserved' && (
+        {!checkout && room.state === 'reserved' && (
           <button
             className="btn primary big"
             disabled={busy}
@@ -277,24 +290,31 @@ function RoomPage() {
             disabled={busy}
             onClick={() => act(() => api.end(roomId), 'Session ended. The door is locked.')}
           >
-            I'm done
+            {checkout ? 'Check out' : "I'm done"}
           </button>
         )}
-        {inUse && !mine && <p className="muted center">Someone is using this room. Reserve a time below.</p>}
-        {room.state === 'free' && !!room.presence && (
+        {checkout && !mine && (
+          <p className="muted center">
+            {inUse ? 'Only the person using this room can check out.' : "This room isn't in use, so there's nothing to check out."}
+          </p>
+        )}
+        {!checkout && inUse && !mine && <p className="muted center">Someone is using this room. Reserve a time below.</p>}
+        {!checkout && room.state === 'free' && !!room.presence && (
           <p className="muted center">The sensor sees someone inside, so it can't be claimed right now.</p>
         )}
       </div>
 
       {note && <Notice tone={note.tone}>{note.text}</Notice>}
 
-      <ReserveCard
-        roomId={roomId}
-        onDone={(n) => {
-          setNote(n);
-          load();
-        }}
-      />
+      {!checkout && (
+        <ReserveCard
+          roomId={roomId}
+          onDone={(n) => {
+            setNote(n);
+            load();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -322,7 +342,7 @@ function MyBookingsPage() {
       {list && list.length === 0 && (
         <div className="card empty">
           <p className="muted">No upcoming bookings.</p>
-          <Link to="/" className="btn primary">
+          <Link to="/rooms" className="btn primary">
             Find a room
           </Link>
         </div>
@@ -359,7 +379,162 @@ function MyBookingsPage() {
   );
 }
 
-const SUGGESTIONS = ['Is anything free right now?', 'Book room 1 now for an hour', "I'm here", 'What are my bookings?'];
+const seconds = (n: number) => (n % 60 ? `${n} s` : `${n / 60} min`);
+
+function AdminLink() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    isAdmin()
+      .then(setShow)
+      .catch(() => setShow(false));
+  }, []);
+  return show ? <NavLink to="/admin">Admin</NavLink> : null;
+}
+
+function AdminPage() {
+  const [view, setView] = useState<AdminView | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const [tenMin, setTenMin] = useState(''); // how many seconds a 10-minute rule should last
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setView(await api.admin());
+    } catch (e) {
+      setNote({ tone: 'error', text: msg(e) });
+    }
+  }, []);
+  usePolling(load);
+
+  async function run(action: () => Promise<AdminView>, done: string) {
+    setBusy(true);
+    try {
+      setView(await action());
+      setNote({ tone: 'ok', text: done });
+    } catch (e) {
+      setNote({ tone: 'error', text: msg(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setSpeed(s: number) {
+    if (!(s >= 10 && s <= 600)) return setNote({ tone: 'error', text: 'Pick between 10 and 600 seconds.' });
+    run(() => api.adminSpeed(s / 10), `10-minute rules now last ${seconds(s)}.`);
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <h1>Admin</h1>
+        <p className="muted">End any session, and speed up the room rules for testing.</p>
+      </div>
+      {note && <Notice tone={note.tone}>{note.text}</Notice>}
+      {!view && !note && <p className="muted">Loading...</p>}
+      {view && (
+        <>
+          <form
+            className="card"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setSpeed(Number(tenMin));
+            }}
+          >
+            <h2>Rule speed</h2>
+            <p className="muted">
+              A 10-minute rule (check-in window, reserved lead, empty-room timeout) lasts{' '}
+              <strong>{seconds(view.rules.no_show)}</strong> right now. Sessions extend every{' '}
+              {seconds(view.rules.extension_step)}. Bookings stay on 15-minute slots.
+            </p>
+            <label className="field">
+              <span>10 minutes should last (seconds)</span>
+              <input
+                type="number"
+                min={10}
+                max={600}
+                value={tenMin}
+                placeholder={String(view.rules.no_show)}
+                onChange={(e) => setTenMin(e.target.value)}
+              />
+            </label>
+            <div className="chips">
+              {[30, 60, 600].map((s) => (
+                <button type="button" key={s} className="chip" disabled={busy} onClick={() => setSpeed(s)}>
+                  {s === 600 ? 'Real time' : seconds(s)}
+                </button>
+              ))}
+            </div>
+            <button className="btn primary" disabled={busy || !tenMin}>
+              Save
+            </button>
+          </form>
+
+          <h2>Rooms</h2>
+          {view.rooms.map((r) => (
+            <div key={r.room_id} className="card">
+              <div className="admin-row">
+                <div className="booking-when">
+                  <strong>Room {r.room_id}</strong>
+                  <span className="muted">
+                    {r.session
+                      ? `${r.session.kind === 'hard' ? 'Booking' : 'Walk-up'} by ${r.session.user.slice(0, 8)}, since ${clock(r.session.started_at)}, extends at ${clock(r.session.expires_at)}`
+                      : 'No session'}
+                    {r.presence ? ' · sensor sees someone' : ''}
+                  </span>
+                </div>
+                {r.session && (
+                  <button
+                    className="btn danger small"
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm(`End the session in room ${r.room_id}? Whoever holds it loses the room.`)) {
+                        run(() => api.adminEnd(r.room_id), `Ended the session in room ${r.room_id}.`);
+                      }
+                    }}
+                  >
+                    End session
+                  </button>
+                )}
+              </div>
+              {[
+                ...r.reservations.map((b) => ({
+                  sk: b.sk,
+                  what: `Booking ${day(b.start)}, ${clock(b.start)} to ${clock(b.end)} by ${(b.user ?? '?').slice(0, 8)} (${b.status ?? '?'})`,
+                })),
+                ...r.stray_slots.map((x) => ({
+                  sk: x.sk,
+                  what: `Stray slot ${clock(x.start)}, blocking that time (left by ${x.res_id})`,
+                })),
+              ].map((row) => (
+                <div key={row.sk} className="admin-row admin-sub">
+                  <span className="muted">{row.what}</span>
+                  <button
+                    className="btn danger small"
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm(`Delete this from room ${r.room_id}?\n${row.what}`)) {
+                        run(() => api.adminDelete(r.room_id, row.sk), `Deleted from room ${r.room_id}.`);
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+const SUGGESTIONS = [
+  'Is anything free right now?',
+  'Book room 2 tomorrow at 3pm for an hour',
+  'What are my bookings?',
+];
+
 function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -391,10 +566,12 @@ function AssistantPage() {
     <div className="chat">
       <div className="page-head">
         <h1>Assistant</h1>
-        <p className="muted">Ask in plain English. It can check rooms and book them for you.</p>
+        <p className="muted">Ask about the study rooms in plain English: what's free, booking, your bookings, cancelling.</p>
       </div>
       <div className="chat-log">
-        <div className="bubble assistant">Hi! I can tell you what's free and book a room for you. What do you need?</div>
+        <div className="bubble assistant">
+          I can check which rooms are free, book one for you, and show or cancel your bookings. What do you need?
+        </div>
         {messages.map((m, i) => (
           <div key={i} className={`bubble ${m.role}`}>
             {m.content}
@@ -444,10 +621,11 @@ export default function App() {
               </Link>
               <nav className="nav">
                 <NavLink to="/" end>
-                  Rooms
+                  Assistant
                 </NavLink>
+                <NavLink to="/rooms">Rooms</NavLink>
                 <NavLink to="/me">My bookings</NavLink>
-                <NavLink to="/assistant">Assistant</NavLink>
+                <AdminLink />
               </nav>
               <button className="btn ghost small" onClick={signOut} title={me}>
                 Sign out
@@ -456,10 +634,13 @@ export default function App() {
             {USING_MOCK && <div className="demo-banner">Demo mode: fake data that resets when you refresh</div>}
             <main className="content">
               <Routes>
-                <Route path="/" element={<RoomsPage />} />
+                {/* The assistant is the front door; /r/:roomId stays direct because the QR code opens it. */}
+                <Route path="/" element={<AssistantPage />} />
+                <Route path="/rooms" element={<RoomsPage />} />
                 <Route path="/r/:roomId" element={<RoomPage />} />
+                <Route path="/r/:roomId/checkout" element={<RoomPage checkout />} />
                 <Route path="/me" element={<MyBookingsPage />} />
-                <Route path="/assistant" element={<AssistantPage />} />
+                <Route path="/admin" element={<AdminPage />} />
               </Routes>
             </main>
           </div>
