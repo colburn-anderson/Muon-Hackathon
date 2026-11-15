@@ -467,6 +467,14 @@ def device_view(room_id, st):
     view["url"] = qr_url(room_id)
     # lock command: 1 = unlock while a session is active (held or warn), 0 = lock
     view["servo"] = 1 if view["state"] in ("held", "warn") else 0
+    # The device shows "check in within" = next_res_start - now while reserved. Fudge it to the check-in
+    # window h_checkin and release_no_shows enforce: no timer until check-in opens, then count to the no-show cutoff.
+    if view["state"] == "reserved":
+        t = now()
+        start = min((int(r["start_ts"]) for r in query_reservations(room_id)
+                     if r.get("status") == "booked" and int(r["start_ts"]) + NO_SHOW > t), default=None)
+        if start is not None:
+            view["next_res_start"] = start + NO_SHOW if t >= start - EARLY_CHECKIN else None
     return view
 
 

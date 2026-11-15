@@ -262,5 +262,39 @@ class Admin(unittest.TestCase):
         self.assertEqual(out["statusCode"], 401)
 
 
+class DeviceCheckinTimer(unittest.TestCase):
+    """The device counts next_res_start - now while reserved; it must cover the check-in window."""
+    START = 1_800_000_000 - 1_800_000_000 % 3600  # slot-aligned for any slot length
+
+    def setUp(self):
+        self.real_now = api.now
+
+    def tearDown(self):
+        api._table, api.now = None, self.real_now
+
+    def view(self, minutes_from_start):
+        api.now = lambda: self.START + int(minutes_from_start * 60)
+        api._table = FakeTable([
+            {"room_id": "1", "sk": "STATE"},
+            {"room_id": "1", "sk": "RES#r1", "status": "booked", "start_ts": self.START, "end_ts": self.START + api.SLOT},
+            {"room_id": "1", "sk": api.slot_sk(self.START), "res_id": "r1", "kind": "hard"}])
+        return api.device_view("1", {"room_id": "1", "sk": "STATE"})
+
+    def test_no_timer_before_check_in_opens(self):
+        v = self.view(-8)  # reserved (10 min lead) but check-in opens at -5
+        self.assertEqual(v["state"], "reserved")
+        self.assertIsNone(v["next_res_start"])
+
+    def test_timer_runs_to_the_no_show_cutoff_from_check_in_open(self):
+        for m in (-5, 0, 9):
+            v = self.view(m)
+            self.assertEqual(v["state"], "reserved")
+            self.assertEqual(v["next_res_start"], self.START + api.NO_SHOW)
+
+    def test_web_view_is_untouched(self):
+        self.view(0)
+        self.assertEqual(api.room_view("1", {"room_id": "1", "sk": "STATE"})["next_res_start"], self.START)
+
+
 if __name__ == "__main__":
     unittest.main()
