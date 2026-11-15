@@ -203,7 +203,9 @@ function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => 
   );
 }
 
-function RoomPage() {
+// checkout: the page the room's second QR opens, /r/:roomId/checkout. It only offers ending
+// your session, so scanning it on the way out is one tap.
+function RoomPage({ checkout = false }: { checkout?: boolean }) {
   const { roomId = '' } = useParams();
   const [room, setRoom] = useState<Room | null>(null);
   const [note, setNote] = useState<Note | null>(null);
@@ -253,7 +255,7 @@ function RoomPage() {
       </section>
 
       <div className="actions">
-        {room.state === 'free' && (
+        {!checkout && room.state === 'free' && (
           <button
             className="btn primary big"
             disabled={busy}
@@ -262,7 +264,7 @@ function RoomPage() {
             Claim this room
           </button>
         )}
-        {room.state === 'reserved' && (
+        {!checkout && room.state === 'reserved' && (
           <button
             className="btn primary big"
             disabled={busy}
@@ -277,24 +279,31 @@ function RoomPage() {
             disabled={busy}
             onClick={() => act(() => api.end(roomId), 'Session ended. The door is locked.')}
           >
-            I'm done
+            {checkout ? 'Check out' : "I'm done"}
           </button>
         )}
-        {inUse && !mine && <p className="muted center">Someone is using this room. Reserve a time below.</p>}
-        {room.state === 'free' && !!room.presence && (
+        {checkout && !mine && (
+          <p className="muted center">
+            {inUse ? 'Only the person using this room can check out.' : "This room isn't in use, so there's nothing to check out."}
+          </p>
+        )}
+        {!checkout && inUse && !mine && <p className="muted center">Someone is using this room. Reserve a time below.</p>}
+        {!checkout && room.state === 'free' && !!room.presence && (
           <p className="muted center">The sensor sees someone inside, so it can't be claimed right now.</p>
         )}
       </div>
 
       {note && <Notice tone={note.tone}>{note.text}</Notice>}
 
-      <ReserveCard
-        roomId={roomId}
-        onDone={(n) => {
-          setNote(n);
-          load();
-        }}
-      />
+      {!checkout && (
+        <ReserveCard
+          roomId={roomId}
+          onDone={(n) => {
+            setNote(n);
+            load();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -467,6 +476,7 @@ export default function App() {
                 <Route path="/" element={<AssistantPage />} />
                 <Route path="/rooms" element={<RoomsPage />} />
                 <Route path="/r/:roomId" element={<RoomPage />} />
+                <Route path="/r/:roomId/checkout" element={<RoomPage checkout />} />
                 <Route path="/me" element={<MyBookingsPage />} />
               </Routes>
             </main>
