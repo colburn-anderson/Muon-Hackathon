@@ -107,8 +107,12 @@ Current local time: {now}. The current quarter hour started at {slot}. All times
 FORMAT = """You write the reply in a study-room booking app, from one API result given as JSON.
 Current local time: {now}. Times in "result" are in this same local time zone.
 - Use only facts in "result". Never invent rooms, times or bookings.
-- Room states: free = open now; held = someone is using it until expires_at ("yours": true means
-  the user); reserved = a booking starts within 10 minutes; warn = in use but ending within 5 minutes.
+- Room states: free = open now; reserved = a booking starts within 10 minutes; held = someone is
+  using it ("yours": true means the user); warn = in use and about to end.
+- next_res_start is when the next booking STARTS, never when a room becomes free.
+- reserved: say it is booked until free_again_at, or booked for the rest of the day if that is null.
+- held or warn: in use with no fixed end time, because a session keeps extending while someone is
+  inside. If next_res_start is set, say it must end by then for a booking.
 - A free room can't be opened from chat: to use it now, scan the QR code on its door; to use it
   later, book it. Never say a free room is in use.
 - Plain text, no markdown. At most 5 short lines; one line per room or booking.
@@ -167,8 +171,8 @@ def clock(ts):
     return "midnight" if t.time() == Time(0) else t.strftime("%-I:%M %p")
 
 
-_TIME_KEYS = {"start", "end", "expires_at", "next_res_start"}
-_HIDE = {"user", "holder", "res_id", "kind", "presence", "yours"}  # usernames, ids and jargon the reply shouldn't repeat
+_TIME_KEYS = {"start", "end", "expires_at", "next_res_start", "free_again_at"}
+_HIDE = {"user", "holder", "res_id", "kind", "presence", "expires_at"}  # expires_at: only the next 5-min extension point  # usernames, ids and jargon the reply shouldn't repeat
 
 
 def humanize(v, key=None):
@@ -194,6 +198,30 @@ def free_ranges(slots):
     if run:
         out.append(run)
     return [f"{clock(a)}-{clock(b)}" for a, b in out]
+
+
+def free_again(call, room_id, now):
+    """When a reserved room is next free: the end of the first run of taken slots from now on.
+    The room view only says when the next booking starts, never when it ends."""
+    t0 = now - now % SLOT
+    busy = False
+    for s in call("GET", f"/rooms/{room_id}/slots", query={"from": t0, "to": t0 + 86400})["slots"]:
+        if not s["free"]:
+            busy = True
+        elif busy:
+            return s["start"]
+    return None  # nothing taken, or taken for the next 24 hours
+
+
+def add_free_again(call, room, now):
+    # Only for reserved rooms. A held room's session grows 5 minutes at a time while someone is
+    # inside, so its slots end soon after now and say nothing about when it will really be free.
+    if room.get("state") == "reserved":
+        try:
+            room["free_again_at"] = free_again(call, room["room_id"], now)
+        except ApiFail:
+            pass  # the status alone still answers the question
+    return room
 
 
 def conversation(history, message):
@@ -267,10 +295,10 @@ def route(message, history, now):
 def act(name, args, call, now):
     room = args.get("room_id")
     if name == "list_rooms":
-        return call("GET", "/rooms")
+        return {"rooms": [add_free_again(call, r, now) for r in call("GET", "/rooms")["rooms"]]}
     if name == "room_status":
         need(args, "room_id")
-        return call("GET", f"/rooms/{room}")
+        return add_free_again(call, call("GET", f"/rooms/{room}"), now)
     if name == "my_bookings":
         mine = call("GET", "/reservations", query={"mine": "true"})["reservations"]
         return {"bookings": sorted((b for b in mine if b["end"] > now), key=lambda b: b["start"])}
