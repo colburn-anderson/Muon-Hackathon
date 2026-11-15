@@ -1,0 +1,19 @@
+Command: ninja all
+[1/9] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/main.cc.obj
+[2/9] Linking C static library esp-idf/main/libmain.a
+[3/9] Performing build step for 'bootloader'
+[1/1] cd /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/bootloader && /home/michael/.espressif/tools/python/v6.1/venv/bin/python /home/michael/.espressif/v6.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/bootloader/bootloader.bin
+Bootloader binary size 0x5680 bytes. 0x2980 bytes (32%) free.
+[4/9] No install step for 'bootloader'
+[5/9] Completed 'bootloader'
+[6/9] Generating esp-idf/esp_system/ld/sections.ld
+Skipping linker script generation, section names unchanged
+[7/9] Linking CXX executable active-sta.elf
+[8/9] Generating binary image from built executable
+esptool v5.6.0
+Creating ESP32-C6 image...
+Merged 3 ELF sections.
+Successfully created ESP32-C6 image.
+Generated /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/active-sta.bin
+[9/9] cd /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6 && /home/michael/.espressif/tools/python/v6.1/venv/bin/python /home/michael/.espressif/v6.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/partition_table/partition-table.bin /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/active-sta.bin
+active-sta.bin binary size 0xfaba0 bytes. Smallest app partition is 0x177000 bytes. 0x7c460 bytes (33%) free.

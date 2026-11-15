@@ -121,11 +121,9 @@ add_subdirectory(apps/lcd)
 add_subdirectory(apps/bl)
 
 add_subdirectory(apps/template)
-add_subdirectory(apps/rf433)
-add_subdirectory(apps/colorbtn)
-add_subdirectory(apps/smoketest)
-add_subdirectory(apps/bench)
-add_subdirectory(apps/ogvegas)
+add_subdirectory(apps/espuart)
+add_subdirectory(apps/roomnode)
+add_subdirectory(apps/sensorprobe)
 # Declares nothing unless LVGL is available -- see apps/lvgl/CMakeLists.txt.
 add_subdirectory(apps/lvgl)
 

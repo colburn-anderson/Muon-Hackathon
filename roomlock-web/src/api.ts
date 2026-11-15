@@ -1,14 +1,18 @@
 import { fetchAuthSession, getCurrentUser } from 'aws-amplify/auth';
 
+/* Shapes match Keegan's "Room Lock API — Team Guide". */
+
 export type RoomState = 'free' | 'held' | 'reserved' | 'warn';
 
 export interface Room {
   room_id: string;
   state: RoomState;
-  holder?: string;
-  expires_at?: number; // epoch seconds
-  next_res_start?: number; // epoch seconds
-  yours?: boolean; // real API only: the holder is the signed-in user
+  presence?: number | boolean | null; // 1 when the room's sensor sees someone inside
+  expires_at?: number | null; // epoch seconds, null when not held
+  next_res_start?: number | null; // epoch seconds, null when nothing is booked
+  holder?: string; // Cognito username, only while held
+  yours?: boolean; // true when you are the one holding the room
+  kind?: 'soft' | 'hard'; // walk-up session or checked-in booking
 }
 
 export interface Reservation {
@@ -16,8 +20,7 @@ export interface Reservation {
   room_id: string;
   start: number; // epoch seconds
   end: number; // epoch seconds
-  user: string;
-  checked_in: boolean;
+  status?: string;
 }
 
 export interface ChatMessage {
@@ -25,8 +28,20 @@ export interface ChatMessage {
   content: string;
 }
 
-const API_URL: string | undefined = import.meta.env.VITE_API_URL;
+const API_URL: string | undefined = import.meta.env.VITE_API_URL?.replace(/\/+$/, '');
 export const USING_MOCK = !API_URL;
+
+// Bookings must start and end on 15-minute boundaries.
+export const SLOT = 15 * 60;
+export const toSlot = (t: number) => Math.floor(t / SLOT) * SLOT;
+
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 const MIN = 60;
 const now = () => Math.floor(Date.now() / 1000);
@@ -37,88 +52,111 @@ export async function currentUserEmail(): Promise<string> {
   return user.signInDetails?.loginId ?? user.username;
 }
 
-/* ---------- real backend (used once VITE_API_URL is set) ---------- */
+/* ---------- real backend (used when VITE_API_URL is set) ---------- */
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const session = await fetchAuthSession();
-  const token = session.tokens?.idToken?.toString();
+  const token = session.tokens?.idToken?.toString(); // the API wants the ID token, not the access token
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(text || `${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    if (res.status === 401) throw new ApiError('Your sign-in expired. Sign out and sign back in.', 401);
+    throw new ApiError(text || `Request failed (${res.status})`, res.status);
+  }
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
-// The API's holder is a Cognito username; the UI compares it to the user's email, so use "yours".
-const fixRoom = async (r: Room): Promise<Room> => (r.yours ? { ...r, holder: await currentUserEmail() } : r);
-
 const real = {
-  getRooms: () => call<{ rooms: Room[] }>('GET', '/rooms').then(({ rooms }) => Promise.all(rooms.map(fixRoom))),
-  getRoom: (id: string) => call<Room>('GET', `/rooms/${id}`).then(fixRoom),
-  claim: (id: string) => call<Room>('POST', `/rooms/${id}/claim`).then(fixRoom),
-  checkIn: (id: string) => call<Room>('POST', `/rooms/${id}/checkin`).then(fixRoom),
-  end: (id: string) => call<Room>('POST', `/rooms/${id}/end`).then(fixRoom),
-  myReservations: () =>
-    call<{ reservations: (Omit<Reservation, 'user' | 'checked_in'> & { status: string })[] }>(
-      'GET',
-      '/reservations?mine=true',
-    ).then(({ reservations }) =>
-      reservations.map((r): Reservation => ({ ...r, user: '', checked_in: r.status === 'checked_in' })),
-    ),
+  getRooms: async () => (await call<{ rooms: Room[] }>('GET', '/rooms')).rooms,
+  getRoom: (id: string) => call<Room>('GET', `/rooms/${id}`),
+  claim: (id: string) => call<Room>('POST', `/rooms/${id}/claim`),
+  checkIn: (id: string) => call<Room>('POST', `/rooms/${id}/checkin`),
+  end: (id: string) => call<Room>('POST', `/rooms/${id}/end`),
+  myReservations: async () =>
+    (await call<{ reservations: Reservation[] }>('GET', '/reservations?mine=true')).reservations,
   reserve: (room_id: string, start: number, end: number) =>
     call<Reservation>('POST', '/reservations', { room_id, start, end }),
-  cancel: (res_id: string) => call<void>('DELETE', `/reservations/${res_id}`),
-  agent: (message: string, history: ChatMessage[]) =>
-    call<{ reply: string }>('POST', '/agent', { message, history }),
+  cancel: async (res_id: string) => {
+    await call<unknown>('DELETE', `/reservations/${res_id}`);
+  },
+  agent: async (message: string, history: ChatMessage[]) => {
+    try {
+      return await call<{ reply: string }>('POST', '/agent', { message, history });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        return { reply: "The assistant isn't connected yet. You can still find and book rooms from the other tabs." };
+      }
+      throw e;
+    }
+  },
 };
 
 /* ---------- fake backend (in memory, resets on refresh) ---------- */
 
-const rooms: Room[] = ['1', '2', '3'].map((room_id): Room => ({ room_id, state: 'free' }));
-const reservations: Reservation[] = [];
+type MockRoom = Room & { holderEmail?: string };
+type MockReservation = Reservation & { user: string; checked_in: boolean };
 
-function update(room: Room): Room {
+const rooms: MockRoom[] = ['1', '2', '3'].map((room_id): MockRoom => ({ room_id, state: 'free' }));
+const reservations: MockReservation[] = [];
+
+function update(room: MockRoom, me: string): Room {
   const t = now();
   if (room.expires_at && room.expires_at <= t) {
-    room.holder = undefined;
-    room.expires_at = undefined;
+    room.holderEmail = undefined;
+    room.expires_at = null;
+    room.kind = undefined;
   }
   const next = reservations
-    .filter((r) => r.room_id === room.room_id && r.end > t && !(r.checked_in && r.user === room.holder))
+    .filter((r) => r.room_id === room.room_id && r.end > t && !(r.checked_in && r.user === room.holderEmail))
     .sort((a, b) => a.start - b.start)[0];
-  room.next_res_start = next?.start;
-  if (room.holder) {
+  room.next_res_start = next?.start ?? null;
+  if (room.holderEmail) {
     room.state = room.expires_at && room.expires_at - t <= 5 * MIN ? 'warn' : 'held';
   } else {
     room.state = next && next.start - t <= 10 * MIN ? 'reserved' : 'free';
   }
-  return { ...room };
+  const { holderEmail, ...shown } = room;
+  return holderEmail
+    ? { ...shown, holder: holderEmail.split('@')[0], yours: holderEmail === me, presence: 0 }
+    : { ...shown, holder: undefined, yours: undefined, kind: undefined, presence: 0 };
 }
 
-function findRoom(id: string): Room {
+function findRoom(id: string): MockRoom {
   const room = rooms.find((r) => r.room_id === id);
-  if (!room) throw new Error(`Room ${id} does not exist.`);
+  if (!room) throw new ApiError(`Room ${id} does not exist.`, 404);
   return room;
 }
 
+const asReservation = ({ user: _user, checked_in, ...r }: MockReservation): Reservation => ({
+  ...r,
+  status: checked_in ? 'checked_in' : 'booked',
+});
+
 async function mockMine(): Promise<Reservation[]> {
-  const user = await currentUserEmail();
-  return reservations.filter((r) => r.user === user && r.end > now()).sort((a, b) => a.start - b.start);
+  const me = await currentUserEmail();
+  return reservations
+    .filter((r) => r.user === me && r.end > now())
+    .sort((a, b) => a.start - b.start)
+    .map(asReservation);
 }
 
 async function mockReserve(room_id: string, start: number, end: number): Promise<Reservation> {
   findRoom(room_id);
-  if (end <= start) throw new Error('End must be after start.');
+  if (start % SLOT || end % SLOT) throw new ApiError('Start and end must be on 15-minute boundaries', 400);
+  if (end <= start) throw new ApiError('End must be after start.', 400);
+  if (start < toSlot(now())) throw new ApiError('That time is in the past.', 400);
   if (reservations.some((r) => r.room_id === room_id && r.start < end && start < r.end)) {
-    throw new Error('That time overlaps another reservation.');
+    throw new ApiError('That time overlaps another booking.', 409);
   }
-  const res: Reservation = {
+  const res: MockReservation = {
     res_id: crypto.randomUUID(),
     room_id,
     start,
@@ -127,20 +165,21 @@ async function mockReserve(room_id: string, start: number, end: number): Promise
     checked_in: false,
   };
   reservations.push(res);
-  return res;
+  return asReservation(res);
 }
 
-// A tiny stand-in for the Bedrock agent so the chat works before the backend exists.
+// A tiny stand-in for the Bedrock agent so the chat works without a backend.
 async function mockAgent(message: string, _history: ChatMessage[]): Promise<{ reply: string }> {
   const text = message.toLowerCase();
-  const list = rooms.map(update);
+  const me = await currentUserEmail();
+  const list = rooms.map((r) => update(r, me));
   const roomMatch = text.match(/room\s*(\d+)/);
 
   if (text.includes('book') && roomMatch) {
     const room = list.find((r) => r.room_id === roomMatch[1]);
     if (!room) return { reply: `I couldn't find room ${roomMatch[1]}.` };
     if (room.state !== 'free') return { reply: `Room ${room.room_id} isn't free right now.` };
-    const start = now();
+    const start = toSlot(now()) + SLOT;
     try {
       await mockReserve(room.room_id, start, start + 60 * MIN);
       return {
@@ -152,56 +191,60 @@ async function mockAgent(message: string, _history: ChatMessage[]): Promise<{ re
   }
   if (text.includes('my') && (text.includes('reserv') || text.includes('booking'))) {
     const mine = await mockMine();
-    if (mine.length === 0) return { reply: "You don't have any upcoming reservations." };
-    return {
-      reply: mine.map((r) => `Room ${r.room_id}: ${clock(r.start)} to ${clock(r.end)}`).join('\n'),
-    };
+    if (mine.length === 0) return { reply: "You don't have any upcoming bookings." };
+    return { reply: mine.map((r) => `Room ${r.room_id}: ${clock(r.start)} to ${clock(r.end)}`).join('\n') };
   }
   if (text.includes('free') || text.includes('available') || text.includes('open')) {
     const free = list.filter((r) => r.state === 'free');
-    if (free.length === 0) return { reply: 'Nothing is free right now. Want me to find the next opening?' };
+    if (free.length === 0) return { reply: 'Nothing is free right now.' };
     return { reply: `Free right now: ${free.map((r) => `Room ${r.room_id}`).join(', ')}.` };
   }
   return {
-    reply:
-      "I'm running in demo mode, so I only know a few things: ask what's free, say \"book room 2\", or ask for your reservations.",
+    reply: 'In demo mode I only know a few things: ask what\'s free, say "book room 2", or ask for your bookings.',
   };
 }
 
 const mock = {
-  getRooms: async () => rooms.map(update),
-  getRoom: async (id: string) => update(findRoom(id)),
+  getRooms: async () => {
+    const me = await currentUserEmail();
+    return rooms.map((r) => update(r, me));
+  },
+  getRoom: async (id: string) => update(findRoom(id), await currentUserEmail()),
   claim: async (id: string) => {
+    const me = await currentUserEmail();
     const room = findRoom(id);
-    if (update(room).state !== 'free') throw new Error('This room is not free right now.');
-    room.holder = await currentUserEmail();
+    if (update(room, me).state !== 'free') throw new ApiError('Room is already held', 409);
+    room.holderEmail = me;
+    room.kind = 'soft';
     room.expires_at = Math.min(room.next_res_start ?? Infinity, now() + 30 * MIN);
-    return update(room);
+    return update(room, me);
   },
   checkIn: async (id: string) => {
+    const me = await currentUserEmail();
     const room = findRoom(id);
-    const user = await currentUserEmail();
     const t = now();
-    const res = reservations.find(
-      (r) => r.room_id === id && r.user === user && r.start - 10 * MIN <= t && t < r.end,
-    );
-    if (!res) throw new Error('You have no reservation for this room right now.');
+    const res = reservations.find((r) => r.room_id === id && r.user === me && r.start - 5 * MIN <= t && t < r.end);
+    if (!res) throw new ApiError('You have no booking for this room right now.', 403);
     res.checked_in = true;
-    room.holder = user;
+    room.holderEmail = me;
+    room.kind = 'hard';
     room.expires_at = res.end;
-    return update(room);
+    return update(room, me);
   },
   end: async (id: string) => {
+    const me = await currentUserEmail();
     const room = findRoom(id);
-    if (room.holder !== (await currentUserEmail())) throw new Error('You are not holding this room.');
-    room.holder = undefined;
-    room.expires_at = undefined;
-    return update(room);
+    if (room.holderEmail !== me) throw new ApiError('This is not your session.', 403);
+    room.holderEmail = undefined;
+    room.expires_at = null;
+    room.kind = undefined;
+    return update(room, me);
   },
   myReservations: mockMine,
   reserve: mockReserve,
   cancel: async (res_id: string) => {
     const i = reservations.findIndex((r) => r.res_id === res_id);
+    if (i >= 0 && reservations[i].checked_in) throw new ApiError('Checked-in bookings can\'t be cancelled. End the session instead.', 409);
     if (i >= 0) reservations.splice(i, 1);
   },
   agent: mockAgent,

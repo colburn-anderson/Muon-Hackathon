@@ -332,6 +332,162 @@ def _scan_rpi_rp2(candidates):
     return found[0] if found else None
 
 
+# The label the RP2040 bootrom puts on its mass-storage volume. On Linux the
+# by-label device node exists the moment the kernel enumerates the board,
+# whether or not anything has mounted it -- which is the state this file has
+# to handle. A headless session, a window manager with no automounter, and a
+# distro that leaves udisks2 running without auto-mounting removable media all
+# leave the volume sitting there unmounted, and the original implementation
+# waited the full timeout with no way out.
+RPI_RP2_LABEL = pathlib.Path("/dev/disk/by-label/RPI-RP2")
+RPI_RP2_BOOT_VID = 0x2E8A
+RPI_RP2_BOOT_PID = 0x0003
+
+# How long to wait before trying to mount the volume ourselves, and how often
+# to repeat it. Nothing here is on the critical path: waiting for an
+# automounter that will never run is the only thing the timeout can do.
+MOUNT_FIRST_TRY_S = 1.0
+MOUNT_RETRY_S = 5.0
+PROGRESS_EVERY_S = 2.0
+
+
+def _mounted_rpi_rp2_points(label=RPI_RP2_LABEL):
+    """Every mount point of the BOOTSEL volume, wherever it was mounted.
+
+    The scan roots (/media, /run/media, /Volumes) cover the desktop
+    automounters, but not `sudo mount /dev/sda1 /mnt`, not a systemd mount
+    unit, and not a nonstandard runtime directory. /proc/self/mounts answers
+    the question directly: resolve the by-label symlink to its device node,
+    then collect every mount point for that node.
+
+    Split out so a test can pass a fake label; returns [] on any read error,
+    because this only widens the search and must never be the reason a flash
+    fails."""
+    try:
+        dev = label.resolve(strict=True)
+    except OSError:
+        return []
+    points = []
+    try:
+        with open("/proc/self/mounts", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) < 2:
+                    continue
+                try:
+                    if pathlib.Path(fields[0]).resolve() != dev:
+                        continue
+                except OSError:
+                    continue
+                # /proc/self/mounts octal-escapes space, tab, newline and '\\'.
+                mnt = (fields[1].replace("\\040", " ").replace("\\011", "\t")
+                       .replace("\\012", "\n").replace("\\134", "\\"))
+                points.append(pathlib.Path(mnt))
+    except OSError:
+        return []
+    return points
+
+
+def _try_mount_rpi_rp2(run=None, label=RPI_RP2_LABEL):
+    """Mount the BOOTSEL volume with udisksctl if no automounter did.
+
+    Returns udisksctl's one-line result on success and None on any failure.
+    Never raises: this sits on the path to a timeout, and a missing
+    udisksctl, a polkit refusal and a device that is not there all mean the
+    same thing to the caller -- keep waiting. `run` is injectable so the
+    tests never shell out.
+
+    udisksctl mounts under /run/media/<user>/<label> by default, which
+    find_rpi_rp2() already scans, and its mount is owned by the invoking
+    user -- so this works without sudo, and `fw flash` should not need it."""
+    if sys.platform == "win32":
+        return None
+    try:
+        if not label.exists():
+            return None
+    except OSError:
+        return None
+    udisksctl = shutil.which("udisksctl")
+    if udisksctl is None:
+        return None
+    if _rp2_boot_count() != 1:
+        return None
+    run = run or subprocess.run
+    try:
+        proc = run([udisksctl, "mount", "-b", str(label)],
+                   capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or proc.stderr or "").strip() or f"mounted {label}"
+
+
+def _rp2_boot_count():
+    """How many CPUs are sitting in the RP2040 ROM bootloader.
+
+    2e8a:0003 is the bootrom's own mass-storage identity, visible even when
+    no filesystem is mounted. It separates "the touch worked and the volume
+    is simply not mounted" from "the CPU never entered BOOTSEL" -- two
+    failures that are otherwise the same silent timeout. The count also
+    gates auto-mounting: with two devices present, the by-label symlink
+    picks one arbitrarily, and that is exactly the ambiguity fact 15
+    refuses elsewhere.
+
+    The bootrom exposes ONLY mass storage -- no CDC -- so pyserial's port
+    list cannot see it. On Linux, sysfs can, and that is the platform where
+    an unmounted volume is the failure this exists to explain."""
+    if sys.platform.startswith("linux"):
+        count = 0
+        usb = pathlib.Path("/sys/bus/usb/devices")
+        try:
+            entries = list(usb.iterdir())
+        except OSError:
+            return 0
+        for dev in entries:
+            try:
+                vid = (dev / "idVendor").read_text().strip()
+                pid = (dev / "idProduct").read_text().strip()
+            except OSError:
+                continue
+            if vid.lower() == f"{RPI_RP2_BOOT_VID:04x}" and \
+                    pid.lower() == f"{RPI_RP2_BOOT_PID:04x}":
+                count += 1
+        return count
+    # Windows and macOS: no sysfs. pyserial will not list a mass-storage-only
+    # device either, so this stays 0 there; both platforms automount the
+    # volume, so the mount path is not needed and the count only decides
+    # whether a hint can be specific.
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return 0
+    try:
+        return sum(1 for p in list_ports.comports()
+                   if p.vid == RPI_RP2_BOOT_VID
+                   and p.pid == RPI_RP2_BOOT_PID)
+    except OSError:
+        return 0
+
+
+def _rp2_boot_present():
+    """True when at least one CPU is in the RP2040 ROM bootloader."""
+    return _rp2_boot_count() > 0
+
+
+def _rp2_timeout_hint():
+    """The line after a timeout that says which failure mode it was."""
+    if _rp2_boot_present():
+        return ("An RP2 Boot device (2e8a:0003) is present, so the CPU did "
+                "enter BOOTSEL -- its volume just is not mounted. Mount it "
+                "and re-run:\n"
+                "  udisksctl mount -b /dev/disk/by-label/RPI-RP2")
+    return ("No RP2 Boot device (2e8a:0003) is present, so the CPU did not "
+            "enter BOOTSEL. Check that it is powered and running code with "
+            "USB up, then hold red through a reset (or use main's BOOTSEL "
+            "button) and try again.")
+
+
 def find_rpi_rp2():
     """Return the mount path of a connected RP2040 in BOOTSEL mode, or None.
 
@@ -362,6 +518,17 @@ def find_rpi_rp2():
                         continue
             except OSError:
                 continue
+        # A volume mounted outside those roots (/mnt, a systemd unit, ...)
+        # is still a BOOTSEL volume. Deduplicate: the same mount is reachable
+        # through both the scan roots and /proc/self/mounts.
+        seen = set()
+        unique = []
+        for c in candidates + _mounted_rpi_rp2_points():
+            key = str(c)
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+        candidates = unique
     return _scan_rpi_rp2(candidates)
 
 
@@ -776,7 +943,12 @@ def _flash_image(uf2, cpu, do_print, build_hint=None, timeout_s=120,
             else:
                 print(f"Put the {cpu.upper()} CPU into BOOTSEL, "
                       "waiting for RPI-RP2 ...")
-            vol = _wait_for_volume(find_volume, timeout_s)
+            vol = _wait_for_volume(
+                find_volume, timeout_s,
+                # Mounting is only safe when the volume cannot belong to the
+                # other CPU: either we identified and touched this one, or
+                # exactly one RP2040 is in BOOTSEL at all.
+                allow_mount=target is not None or _rp2_boot_count() == 1)
     except MultipleRp2VolumesError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -793,6 +965,7 @@ def _flash_image(uf2, cpu, do_print, build_hint=None, timeout_s=120,
         pause()
     elif not vol:
         print("no RPI-RP2 volume appeared", file=sys.stderr)
+        print(_rp2_timeout_hint(), file=sys.stderr)
         return 1
 
     shutil.copy(uf2, vol / uf2.name)
@@ -831,7 +1004,8 @@ def _touch_port(port):
         pass
 
 
-def _wait_for_volume(find_volume, timeout_s):
+def _wait_for_volume(find_volume, timeout_s, mount=None, progress=None,
+                     allow_mount=True):
     """Poll for a BOOTSEL volume until it appears or the deadline passes.
 
     Returns the volume path, or None on timeout. Propagates
@@ -841,14 +1015,51 @@ def _wait_for_volume(find_volume, timeout_s):
     Checks BEFORE testing the deadline, so timeout_s=0 still performs exactly
     one check -- that is what keeps a "no volume ever appears" test fast
     instead of a real-time wait. Shared by do_bootsel and do_flash,
-    which must not each carry their own copy of this loop."""
-    deadline = time.time() + timeout_s
+    which must not each carry their own copy of this loop.
+
+    Between polls it does the two things the original loop did not:
+
+    - Tries to mount the volume with udisksctl when no automounter has,
+      after MOUNT_FIRST_TRY_S and every MOUNT_RETRY_S after that. A headless
+      Linux session leaves the board sitting in BOOTSEL with an unmounted
+      filesystem, and no amount of waiting changes that. `allow_mount=False`
+      keeps the one caller that cannot attribute the volume -- a flash whose
+      CPU was never identified -- from silently copying to a drive the
+      operator mounted by hand.
+    - Says it is still waiting, every PROGRESS_EVERY_S seconds. A 120-second
+      silent poll is indistinguishable from a hang, and was reported as one.
+
+    `mount` and `progress` are injectable so the tests never shell out or
+    print; progress is a callable taking the line to show."""
+    mount = mount if mount is not None else _try_mount_rpi_rp2
+    progress = progress if progress is not None else (
+        lambda msg: print(msg, file=sys.stderr))
+
+    started = time.time()
+    deadline = started + timeout_s
+    next_mount = started + MOUNT_FIRST_TRY_S
+    next_progress = started + PROGRESS_EVERY_S
     while True:
         vol = find_volume()
         if vol:
             return vol
-        if time.time() >= deadline:
+        now = time.time()
+        if now >= deadline:
             return None
+        if allow_mount and now >= next_mount:
+            next_mount = now + MOUNT_RETRY_S
+            mounted = mount()
+            if mounted:
+                progress(mounted)
+                # Try the scan immediately: udisksctl usually makes the
+                # volume visible at once, and one extra scan is cheaper than
+                # another half-second poll.
+                vol = find_volume()
+                if vol:
+                    return vol
+        if now >= next_progress:
+            next_progress = now + PROGRESS_EVERY_S
+            progress(f"waiting for RPI-RP2 ... {int(now - started)}s")
         time.sleep(0.5)
 
 
@@ -912,6 +1123,7 @@ def do_bootsel(cpu=None, port=None, do_print=False, timeout_s=30,
           f"{port}. The CPU may not have been running code with USB up -- "
           "fact 30 needs a live CDC, and it cannot rescue a hung image.",
           file=sys.stderr)
+    print(_rp2_timeout_hint(), file=sys.stderr)
     return 1
 
 

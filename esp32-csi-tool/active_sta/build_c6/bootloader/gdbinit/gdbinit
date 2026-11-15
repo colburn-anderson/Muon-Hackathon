@@ -1,0 +1,2 @@
+source /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/bootloader/gdbinit/symbols
+source /home/michael/Documents/workdir/freewilli/Muon-Hackathon/esp32-csi-tool/active_sta/build_c6/bootloader/gdbinit/connect

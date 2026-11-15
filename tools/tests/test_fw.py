@@ -1098,5 +1098,96 @@ class TestFlashTouches(unittest.TestCase):
                         find_volume=_volume_after(1, self.vol))
         self.assertEqual(touched, ["COM60"])
 
+class TestWaitForVolume(unittest.TestCase):
+    """The Linux failure these cover: the board is in BOOTSEL, its volume is
+    NOT mounted, and no automounter is going to do it. Waiting was the only
+    thing the original loop could do, so the command hung for its full
+    timeout and then blamed the CPU."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_mount_is_tried_and_the_volume_is_returned(self):
+        vol = pathlib.Path("/run/media/u/RPI-RP2")
+        mounted = []
+        messages = []
+        state = {"checks": 0}
+
+        def find():
+            state["checks"] += 1
+            # Unmounted until the mount helper has run, then visible -- the
+            # real udisksctl ordering, just without the second of udev.
+            return vol if mounted else None
+
+        with unittest.mock.patch.object(fw, "MOUNT_FIRST_TRY_S", 0.0):
+            got = fw._wait_for_volume(
+                find, 5, mount=lambda: mounted.append(True) or "mounted it",
+                progress=messages.append)
+        self.assertEqual(got, vol)
+        self.assertEqual(mounted, [True])
+        self.assertIn("mounted it", messages)
+
+    def test_allow_mount_false_does_not_mount(self):
+        # The one caller that cannot attribute the volume: a flash whose CPU
+        # was never identified. It must still wait for the operator, exactly
+        # as before, rather than silently copying to a hand-mounted drive.
+        mounted = []
+        with unittest.mock.patch.object(fw, "MOUNT_FIRST_TRY_S", 0.0):
+            got = fw._wait_for_volume(
+                lambda: None, 0.1, mount=lambda: mounted.append(True),
+                progress=lambda _m: None, allow_mount=False)
+        self.assertIsNone(got)
+        self.assertEqual(mounted, [])
+
+    def test_progress_is_reported_while_waiting(self):
+        messages = []
+        with unittest.mock.patch.object(fw, "PROGRESS_EVERY_S", 0.0):
+            got = fw._wait_for_volume(lambda: None, 0.1, mount=lambda: None,
+                                      progress=messages.append,
+                                      allow_mount=False)
+        self.assertIsNone(got)
+        self.assertTrue(any("waiting for RPI-RP2" in m for m in messages))
+
+    def test_try_mount_uses_udisksctl(self):
+        label = pathlib.Path(self.tmp.name) / "RPI-RP2"
+        label.write_text("")
+        seen = []
+
+        class Proc:
+            returncode = 0
+            stdout = "Mounted /dev/sda1 at /run/media/u/RPI-RP2"
+            stderr = ""
+
+        def run(argv, **kw):
+            seen.append(argv)
+            return Proc()
+
+        with unittest.mock.patch.object(fw, "_rp2_boot_count", return_value=1), \
+                unittest.mock.patch.object(fw.shutil, "which",
+                                           return_value="/usr/bin/udisksctl"):
+            msg = fw._try_mount_rpi_rp2(run=run, label=label)
+        self.assertIn("/run/media/u/RPI-RP2", msg)
+        self.assertEqual(seen[0][:3], ["/usr/bin/udisksctl", "mount", "-b"])
+
+    def test_try_mount_refuses_when_two_cpus_are_in_bootsel(self):
+        # The by-label symlink picks one of two identical volumes
+        # arbitrarily, which is the ambiguity fact 15 exists to refuse.
+        label = pathlib.Path(self.tmp.name) / "RPI-RP2"
+        label.write_text("")
+        seen = []
+        with unittest.mock.patch.object(fw, "_rp2_boot_count", return_value=2), \
+                unittest.mock.patch.object(fw.shutil, "which",
+                                           return_value="/usr/bin/udisksctl"):
+            msg = fw._try_mount_rpi_rp2(run=seen.append, label=label)
+        self.assertIsNone(msg)
+        self.assertEqual(seen, [])
+
+    def test_mounted_points_is_empty_for_a_missing_label(self):
+        missing = pathlib.Path(self.tmp.name) / "nope"
+        self.assertEqual(fw._mounted_rpi_rp2_points(label=missing), [])
+
+
 if __name__ == "__main__":
     unittest.main()

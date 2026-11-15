@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Routes, Route, Link, NavLink, useParams } from 'react-router-dom';
 import { Authenticator } from '@aws-amplify/ui-react';
-import { api, USING_MOCK, type ChatMessage, type Reservation, type Room, type RoomState } from './api';
+import { api, SLOT, toSlot, USING_MOCK, type ChatMessage, type Reservation, type Room, type RoomState } from './api';
 import './App.css';
 
 /* ---------- helpers ---------- */
@@ -10,12 +10,12 @@ type Note = { tone: 'ok' | 'error'; text: string };
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const nowSec = () => Math.floor(Date.now() / 1000);
-const clock = (sec?: number) =>
+const clock = (sec?: number | null) =>
   sec ? new Date(sec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
 const day = (sec: number) =>
   new Date(sec * 1000).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 
-function fromNow(sec?: number): string {
+function fromNow(sec?: number | null): string {
   if (!sec) return '';
   const m = Math.round((sec - nowSec()) / 60);
   if (m <= 0) return 'now';
@@ -40,7 +40,7 @@ const LABEL: Record<RoomState, string> = {
   warn: 'Ending soon',
 };
 
-function describe(room: Room, me: string): string {
+function describe(room: Room): string {
   switch (room.state) {
     case 'free':
       return room.next_res_start ? `Free until ${clock(room.next_res_start)}` : 'Free now';
@@ -48,7 +48,7 @@ function describe(room: Room, me: string): string {
       return `Reserved at ${clock(room.next_res_start)}`;
     case 'held':
     case 'warn':
-      return `${room.holder === me ? 'Yours' : 'In use'} until ${clock(room.expires_at)}`;
+      return `${room.yours ? 'Yours' : 'In use'} until ${clock(room.expires_at)}`;
   }
 }
 
@@ -76,8 +76,8 @@ function StatusPill({ state }: { state: RoomState }) {
 
 // A drawn door. It stands ajar when the room is free, swings wide open when the room
 // is yours, and stays shut otherwise.
-function Door({ room, me }: { room: Room; me: string }) {
-  const pose = room.holder === me ? 'open' : room.state === 'free' ? 'ajar' : 'shut';
+function Door({ room }: { room: Room }) {
+  const pose = room.yours ? 'open' : room.state === 'free' ? 'ajar' : 'shut';
   return (
     <div className={`door pose-${pose}`} aria-hidden="true">
       <div className="door-frame">
@@ -109,7 +109,7 @@ function AuthHeader() {
 
 /* ---------- pages ---------- */
 
-function RoomsPage({ me }: { me: string }) {
+function RoomsPage() {
   const [rooms, setRooms] = useState<Room[] | null>(null);
   const [error, setError] = useState('');
   const load = useCallback(async () => {
@@ -139,11 +139,11 @@ function RoomsPage({ me }: { me: string }) {
         {rooms?.map((r) => (
           <Link key={r.room_id} to={`/r/${r.room_id}`} className="room-tile">
             <div className="door-stand">
-              <Door room={r} me={me} />
+              <Door room={r} />
             </div>
             <span className="room-number">Room {r.room_id}</span>
             <StatusPill state={r.state} />
-            <span className="room-tile-detail">{describe(r, me)}</span>
+            <span className="room-tile-detail">{describe(r)}</span>
           </Link>
         ))}
       </div>
@@ -158,7 +158,7 @@ function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => 
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const s = Math.floor(new Date(start).getTime() / 1000);
+    const s = toSlot(Math.floor(new Date(start).getTime() / 1000));
     if (!start || Number.isNaN(s)) return onDone({ tone: 'error', text: 'Pick a start time.' });
     setBusy(true);
     try {
@@ -179,7 +179,7 @@ function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => 
       <h2>Reserve this room</h2>
       <label className="field">
         <span>Start</span>
-        <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
+        <input type="datetime-local" step={SLOT} value={start} onChange={(e) => setStart(e.target.value)} />
       </label>
       <div className="field">
         <span>Length</span>
@@ -203,7 +203,7 @@ function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => 
   );
 }
 
-function RoomPage({ me }: { me: string }) {
+function RoomPage() {
   const { roomId = '' } = useParams();
   const [room, setRoom] = useState<Room | null>(null);
   const [note, setNote] = useState<Note | null>(null);
@@ -233,7 +233,7 @@ function RoomPage({ me }: { me: string }) {
 
   if (!room) return note ? <Notice tone="error">{note.text}</Notice> : <p className="muted">Loading room...</p>;
 
-  const mine = room.holder === me;
+  const mine = !!room.yours;
   const inUse = room.state === 'held' || room.state === 'warn';
   return (
     <>
@@ -242,12 +242,12 @@ function RoomPage({ me }: { me: string }) {
       </Link>
       <section className="hero">
         <div className="door-stand hero-door">
-          <Door room={room} me={me} />
+          <Door room={room} />
         </div>
         <h1>Room {room.room_id}</h1>
         <StatusPill state={room.state} />
         <p className="hero-detail">
-          {describe(room, me)}
+          {describe(room)}
           {inUse && room.expires_at ? ` (ends ${fromNow(room.expires_at)})` : ''}
         </p>
       </section>
@@ -281,6 +281,9 @@ function RoomPage({ me }: { me: string }) {
           </button>
         )}
         {inUse && !mine && <p className="muted center">Someone is using this room. Reserve a time below.</p>}
+        {room.state === 'free' && !!room.presence && (
+          <p className="muted center">The sensor sees someone inside, so it can't be claimed right now.</p>
+        )}
       </div>
 
       {note && <Notice tone={note.tone}>{note.text}</Notice>}
@@ -319,7 +322,7 @@ function MyBookingsPage() {
       {list && list.length === 0 && (
         <div className="card empty">
           <p className="muted">No upcoming bookings.</p>
-          <Link to="/" className="btn primary">
+          <Link to="/rooms" className="btn primary">
             Find a room
           </Link>
         </div>
@@ -332,18 +335,24 @@ function MyBookingsPage() {
             </Link>
             <span className="muted">
               {day(r.start)}, {clock(r.start)} to {clock(r.end)}
-              {r.checked_in ? ' (checked in)' : ` (starts ${fromNow(r.start)})`}
+              {r.status === 'checked_in' ? ' (checked in)' : ` (starts ${fromNow(r.start)})`}
             </span>
           </div>
-          <button
-            className="btn danger small"
-            onClick={async () => {
-              await api.cancel(r.res_id);
-              await load();
-            }}
-          >
-            Cancel
-          </button>
+          {r.status !== 'checked_in' && (
+            <button
+              className="btn danger small"
+              onClick={async () => {
+                try {
+                  await api.cancel(r.res_id);
+                  await load();
+                } catch (e) {
+                  setError(msg(e));
+                }
+              }}
+            >
+              Cancel
+            </button>
+          )}
         </div>
       ))}
     </>
@@ -456,8 +465,8 @@ export default function App() {
               <Routes>
                 {/* The assistant is the front door; /r/:roomId stays direct because the QR code opens it. */}
                 <Route path="/" element={<AssistantPage />} />
-                <Route path="/rooms" element={<RoomsPage me={me} />} />
-                <Route path="/r/:roomId" element={<RoomPage me={me} />} />
+                <Route path="/rooms" element={<RoomsPage />} />
+                <Route path="/r/:roomId" element={<RoomPage />} />
                 <Route path="/me" element={<MyBookingsPage />} />
               </Routes>
             </main>

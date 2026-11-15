@@ -46,7 +46,10 @@ add_library(fwog_common STATIC
     common/io_seq.c
     common/dsp/cic.c
     common/dsp/dcblock.c
-    common/dsp/spectrum.c)
+    common/dsp/spectrum.c
+    # Flat-object JSON reader. Both CPUs' room-node halves parse the same wire
+    # messages, so it belongs here rather than in either app.
+    common/json/jhelp.c)
 target_compile_options(fwog_common PRIVATE ${FWOG_WARN_FLAGS})
 target_include_directories(fwog_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(fwog_common PUBLIC

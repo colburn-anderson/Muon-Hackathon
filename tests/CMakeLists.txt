@@ -16,10 +16,23 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra)
 endif()
 
+# libm explicitly for every host test binary. Modules under test use
+# sinf/sqrtf/logf, and glibc keeps those out of libc proper, so without this
+# four binaries fail to LINK on Linux while passing wherever the compiler
+# happens to fold them. A suite that cannot build is worse than one that
+# fails: it hides the failures. Guarded by compiler ID for the cl.exe fallback
+# noted above.
+function(fwog_link_libm name)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT APPLE)
+        target_link_libraries(${name} PRIVATE m)
+    endif()
+endfunction()
+
 function(fwog_add_test name)
     add_executable(${name} ${name}.c ${CMAKE_CURRENT_SOURCE_DIR}/test_util.c ${ARGN})
     target_include_directories(${name} PRIVATE ${BSP} ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(${name} PRIVATE HOST_TEST=1)
+    fwog_link_libm(${name})
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -34,7 +47,15 @@ fwog_add_test(test_uf2_info ${BSP}/common/crc.c ${BSP}/common/uf2_info.c)
 # host tree has no fwog_common, so pass the same default explicitly.
 fwog_add_test(test_image_crc ${BSP}/common/crc.c)
 fwog_add_test(test_uart_baud ${BSP}/common/link/link_uart.c)
+
 target_compile_definitions(test_uart_baud PRIVATE FWOG_LINK_BAUD=12500000u)
+
+# The room node's JSON reader. Shared by both firmwares: the C6 parses the API's
+# responses with it and the main CPU parses the C6's messages, so it lives in
+# bsp/common/json and its edge cases are tested here. It is the piece that
+# decides whether the display says "reserved" or "unknown".
+fwog_add_test(test_jhelp ${BSP}/common/json/jhelp.c)
+target_include_directories(test_jhelp PRIVATE ${BSP}/common/json)
 
 fwog_add_test(test_bl_protocol
     ${BSP}/common/crc.c ${BSP}/common/app_meta.c
@@ -53,6 +74,7 @@ function(fwog_add_cpu_test name cpu)
     target_include_directories(${name} PRIVATE
         ${BSP}/${cpu}_cpu ${BSP} ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(${name} PRIVATE HOST_TEST=1)
+    fwog_link_libm(${name})
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
