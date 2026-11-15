@@ -582,15 +582,39 @@ def is_admin(ev):
     return "admin" in groups
 
 
+def room_rows(room_id):
+    """Every row of one room. shortcut: one query page (1 MB), plenty at demo scale; paginate if it grows."""
+    return table().query(KeyConditionExpression=Key("room_id").eq(room_id), ConsistentRead=True)["Items"]
+
+
+def admin_room(st):
+    """One room as the admin page sees it: session, every booking, and stray slots. A stray slot is
+    a current or future SLOT# row that no live session or booking owns, so it blocks that time."""
+    rid, t = st["room_id"], now()
+    rows = room_rows(rid)
+    sess = st.get("session") or None
+    res = [r for r in rows if r["sk"].startswith("RES#")]
+    live = {r["sk"][4:] for r in res if r.get("status") in ("booked", "checked_in")}
+    if sess:
+        live.add(sess["res_id"])
+    stray = [r for r in rows if r["sk"].startswith("SLOT#") and r["res_id"] not in live
+             and slot_ts(r["sk"]) >= slot_floor(t)]
+    return {
+        "room_id": rid, "presence": is_present(st), "session": sess,
+        "reservations": sorted(({"sk": r["sk"], "user": r.get("user"), "start": r["start_ts"], "end": r["end_ts"],
+                                 "status": r.get("status")} for r in res), key=lambda r: -int(r["start"])),
+        "stray_slots": [{"sk": r["sk"], "start": slot_ts(r["sk"]), "res_id": r["res_id"]} for r in stray],
+    }
+
+
 def h_admin(ev, user):
-    """Every room's raw session and the current rule durations, for the admin page."""
+    """Every room's session, bookings and stray slots, and the current rule durations."""
     items = table().scan(FilterExpression=Attr("sk").eq("STATE"))["Items"]
     return {
         "seconds_per_minute": MINUTE,
         "rules": {"extension_step": TICK, "empty_room_timeout": VOID, "reserved_lead": SOFT_LEAD,
                   "no_show": NO_SHOW, "warning": WARN, "early_checkin": EARLY_CHECKIN},
-        "rooms": [{"room_id": i["room_id"], "presence": is_present(i), "session": i.get("session") or None}
-                  for i in sorted(items, key=lambda i: str(i["room_id"]))],
+        "rooms": [admin_room(i) for i in sorted(items, key=lambda i: str(i["room_id"]))],
     }
 
 
@@ -602,6 +626,35 @@ def h_admin_end(ev, user):
         raise ApiError(409, f"room {rid} has no session")
     end_session(rid, st, "admin")
     print(json.dumps({"admin_end": rid, "by": user}))
+    return h_admin(ev, user)
+
+
+def h_admin_delete(ev, user):
+    """Delete one booking (any user's, with every slot it holds) or one stray slot.
+    A room's STATE row is refused: that would delete the room itself."""
+    b = body(ev)
+    rid, sk = str(b.get("room_id") or ""), str(b.get("sk") or "")
+    if not rid or not sk.startswith(("RES#", "SLOT#")):
+        raise ApiError(400, "room_id and a RES# or SLOT# sk are required; end a session instead of deleting it")
+    rows = {r["sk"]: r for r in room_rows(rid)}
+    row = rows.get(sk)
+    if not row:
+        raise ApiError(404, f"no row {sk} in room {rid}")
+    owner = sk[4:] if sk.startswith("RES#") else row["res_id"]
+    st = get_state(rid)
+    if (st.get("session") or {}).get("res_id") == owner:
+        end_session(rid, st, "admin")  # checked-in booking, or a slot of the live session: end it first
+        rows = {r["sk"]: r for r in room_rows(rid)}
+    if sk.startswith("RES#"):
+        # shortcut: one transaction caps at 100 rows, so a booking longer than ~24 h keeps a few slots
+        ops = [tx_delete({"room_id": rid, "sk": sk})] + [
+            tx_delete({"room_id": rid, "sk": k}) for k, r in rows.items()
+            if k.startswith("SLOT#") and r["res_id"] == owner][:99]
+    else:
+        ops = [tx_delete({"room_id": rid, "sk": sk})] if sk in rows else []
+    if ops:
+        transact(ops, "that row changed, try again")
+    print(json.dumps({"admin_delete": sk, "room": rid, "by": user}))
     return h_admin(ev, user)
 
 
@@ -648,6 +701,7 @@ ADMIN_ROUTES = {
     "GET /admin": h_admin,
     "POST /admin/rooms/{id}/end": h_admin_end,
     "POST /admin/settings": h_admin_settings,
+    "POST /admin/delete": h_admin_delete,
 }
 # FreeWili routes: NO authorizer in API Gateway. The x-device-key header protects them.
 DEVICE_ROUTES = {
@@ -717,7 +771,8 @@ _PATTERNS = [  # used when called through a Lambda Function URL (no API Gateway 
     ("POST",   r"/device/rooms/(?P<id>[^/]+)/end",     "POST /device/rooms/{id}/end"),
     ("GET",    r"/admin",                              "GET /admin"),
     ("POST",   r"/admin/rooms/(?P<id>[^/]+)/end",      "POST /admin/rooms/{id}/end"),
-    ("POST",   r"/admin/settings",                     "POST /admin/settings"),]
+    ("POST",   r"/admin/settings",                     "POST /admin/settings"),
+    ("POST",   r"/admin/delete",                       "POST /admin/delete"),]
 
 
 def resolve_route(event):

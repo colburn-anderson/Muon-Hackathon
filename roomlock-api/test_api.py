@@ -6,16 +6,35 @@ import unittest
 
 
 class _Expr:
-    """Stands in for boto3 condition builders: Attr("sk").eq("STATE") & ... just builds a value."""
+    """Stands in for boto3 condition builders: Key("sk").between(a, b) builds a tree that
+    FakeTable can evaluate. Key("x") is ("x",); .op(args) is (op, parent, *args)."""
 
     def __init__(self, *a):
         self.a = a
 
     def __getattr__(self, name):
-        return lambda *a: _Expr(name, *a)
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return lambda *args: _Expr(name, self, *args)
 
     def __and__(self, other):
         return _Expr("and", self, other)
+
+
+def matches(item, e):
+    op = e.a[0]
+    if op == "and":
+        return matches(item, e.a[1]) and matches(item, e.a[2])
+    v = item.get(e.a[1].a[0])
+    if op == "eq":
+        return v == e.a[2]
+    if op == "between":
+        return v is not None and e.a[2] <= v <= e.a[3]
+    if op == "begins_with":
+        return str(v).startswith(e.a[2])
+    if op == "is_in":
+        return v in e.a[2]
+    raise NotImplementedError(op)
 
 
 class ClientError(Exception):
@@ -46,8 +65,20 @@ class FakeTable:
     def __init__(self, items=(), fail_get=False):
         self.items = {(i["room_id"], i["sk"]): dict(i) for i in items}
         self.fail_get, self.tx = fail_get, []
-        self.meta = types.SimpleNamespace(client=types.SimpleNamespace(
-            transact_write_items=lambda TransactItems: self.tx.append(TransactItems)))
+        self.meta = types.SimpleNamespace(client=types.SimpleNamespace(transact_write_items=self._transact))
+
+    def _transact(self, TransactItems):
+        """Applies the writes the admin paths make: deletes, and end_session's two updates."""
+        self.tx.append(TransactItems)
+        for op in TransactItems:
+            kind, body = next(iter(op.items()))
+            key = (body["Key"]["room_id"], body["Key"]["sk"])
+            if kind == "Delete":
+                self.items.pop(key, None)
+            elif kind == "Update" and "REMOVE #s" in body["UpdateExpression"]:
+                self.items[key].pop("session", None)
+            elif kind == "Update" and ":done" in body["ExpressionAttributeValues"]:
+                self.items[key]["status"] = "ended"
 
     def get_item(self, Key, ConsistentRead=False):
         if self.fail_get:
@@ -61,11 +92,12 @@ class FakeTable:
         self.items[(Key["room_id"], Key["sk"])] = {
             **Key, "seconds_per_minute": v[":m"], "updated_by": v[":u"], "updated_at": v[":t"]}
 
-    def scan(self, FilterExpression=None):
-        return {"Items": [dict(i) for i in self.items.values() if i["sk"] == "STATE"]}
+    def scan(self, FilterExpression):
+        return {"Items": [dict(i) for i in self.items.values() if matches(i, FilterExpression)]}
 
-    def query(self, **kw):
-        return {"Items": []}  # no SLOT rows in these tests
+    def query(self, KeyConditionExpression, ConsistentRead=False):
+        rows = [dict(i) for i in self.items.values() if matches(i, KeyConditionExpression)]
+        return {"Items": sorted(rows, key=lambda i: i["sk"])}
 
 
 SESSION = {"res_id": "s_abc", "user": "someone", "kind": "soft", "started_at": 1, "expires_at": 2}
@@ -109,6 +141,55 @@ class Admin(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([(r["room_id"], r["session"]) for r in out["rooms"]], [("1", SESSION), ("2", None)])
         self.assertEqual(out["rules"]["no_show"], 600)
+
+    def add(self, room, sk, **f):
+        self.table.items[(room, sk)] = {"room_id": room, "sk": sk, **f}
+
+    def bookings(self):
+        """Room 2: a booked reservation with two slots, a stray future slot, a stray past slot."""
+        t = api.slot_floor(api.now())
+        self.add("2", "RES#r_1", user="ann", start_ts=t + 3600, end_ts=t + 5400, status="booked")
+        self.add("2", "RES#r_old", user="bob", start_ts=t - 7200, end_ts=t - 6300, status="no_show")
+        for ts in (t + 3600, t + 4500):
+            self.add("2", api.slot_sk(ts), res_id="r_1", kind="hard")
+        self.add("2", api.slot_sk(t + 900), res_id="s_gone", kind="soft")
+        self.add("2", api.slot_sk(t - 900), res_id="s_gone", kind="soft")
+        return t
+
+    def test_admin_view_shows_every_booking_and_only_blocking_stray_slots(self):
+        t = self.bookings()
+        room = self.call("GET /admin")[1]["rooms"][1]
+        self.assertEqual([r["sk"] for r in room["reservations"]], ["RES#r_1", "RES#r_old"])  # newest first
+        self.assertEqual(room["stray_slots"], [{"sk": api.slot_sk(t + 900), "start": t + 900, "res_id": "s_gone"}])
+
+    def test_delete_any_users_booking_with_its_slots(self):
+        t = self.bookings()
+        status, _ = self.call("POST /admin/delete", body={"room_id": "2", "sk": "RES#r_1"})
+        self.assertEqual(status, 200)
+        left = sorted(sk for room, sk in self.table.items if room == "2")
+        self.assertEqual(left, sorted(["STATE", "RES#r_old", api.slot_sk(t + 900), api.slot_sk(t - 900)]))
+
+    def test_delete_a_checked_in_booking_ends_its_session_first(self):
+        t = api.slot_floor(api.now())
+        self.table.items[("1", "STATE")]["session"] = {**SESSION, "res_id": "r_9", "kind": "hard"}
+        self.add("1", "RES#r_9", user="ann", start_ts=t, end_ts=t + 900, status="checked_in")
+        self.add("1", api.slot_sk(t), res_id="r_9", kind="hard")
+        self.assertEqual(self.call("POST /admin/delete", body={"room_id": "1", "sk": "RES#r_9"})[0], 200)
+        self.assertNotIn("session", self.table.items[("1", "STATE")])
+        self.assertEqual([sk for room, sk in self.table.items if room == "1"], ["STATE"])
+
+    def test_delete_a_stray_slot(self):
+        t = self.bookings()
+        stray = api.slot_sk(t + 900)
+        self.assertEqual(self.call("POST /admin/delete", body={"room_id": "2", "sk": stray})[0], 200)
+        self.assertNotIn(("2", stray), self.table.items)
+        self.assertIn(("2", "RES#r_1"), self.table.items)
+
+    def test_delete_refuses_the_room_itself_and_unknown_rows(self):
+        self.assertEqual(self.call("POST /admin/delete", body={"room_id": "1", "sk": "STATE"})[0], 400)
+        self.assertEqual(self.call("POST /admin/delete", body={"room_id": "1", "sk": "RES#nope"}),
+                         (404, "No row RES#nope in room 1"))
+        self.assertIn(("1", "STATE"), self.table.items)
 
     def test_end_any_session_removes_it_even_if_not_yours(self):
         status, _ = self.call("POST /admin/rooms/{id}/end", id="1")
