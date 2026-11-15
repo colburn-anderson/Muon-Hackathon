@@ -66,10 +66,13 @@ class Run(unittest.TestCase):
     def setUp(self):
         self._time = agent.time.time
         agent.time.time = lambda: NOW
+        agent._slot_checked = NOW  # slot length already known: no lookup call unless a test asks
 
     def tearDown(self):
         agent.time.time = self._time
         agent._brt = None
+        agent.set_slot(900)
+        agent._slot_checked = 0.0
 
     def run_agent(self, tool, args=None, message="hi", history=None, api=None):
         agent._brt = self.brt = FakeBedrock(tool, args)
@@ -159,6 +162,28 @@ class Run(unittest.TestCase):
         self.assertNotIn("expires_at", result)  # 5 minutes out, and it would read as an end time
         self.assertEqual(result["next_res_start"], "Sun Nov 15, 3:00 PM")
 
+    def test_agent_follows_the_apis_slot_length(self):
+        agent._slot_checked = 0.0
+        api = FakeApi()
+        rooms = api.__call__
+
+        def with_slot(method, path, body=None, query=None):
+            out = rooms(method, path, body, query)
+            return {**out, "slot_seconds": 60} if path == "/rooms" else out
+
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:07", "end": "15:08"}, api=with_slot)
+        self.assertEqual([c[:2] for c in api.calls], [("GET", "/rooms"), ("POST", "/reservations")])
+        self.assertIn("any whole minute", self.brt.calls[0]["system"][0]["text"])
+        book = [t for t in self.brt.calls[0]["toolConfig"]["tools"] if t["toolSpec"]["name"] == "book"][0]
+        self.assertIn("any whole minute", json.dumps(book))
+
+    def test_slot_lookup_failure_keeps_the_last_length(self):
+        agent._slot_checked = 0.0
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:07", "end": "16:00"},
+                       api=FakeApi(fail=(500, "boom")))
+        self.assertEqual(agent.SLOT, 900)
+        self.assertIn("Which start and end time", self.brt.formatter_input()["result"]["error"])
+
     def test_presence_is_hidden_from_the_formatter(self):
         self.run_agent("room_status", {"room_id": "2"})
         self.assertNotIn("presence", self.brt.formatter_input()["result"])
@@ -225,8 +250,12 @@ class Run(unittest.TestCase):
 
 
 class Handler(unittest.TestCase):
+    def setUp(self):
+        agent._slot_checked = float("inf")  # never look the slot length up over the real network
+
     def tearDown(self):
         agent._brt = None
+        agent._slot_checked = 0.0
 
     def test_lambda_handler(self):
         agent._brt = FakeBedrock("out_of_scope")
