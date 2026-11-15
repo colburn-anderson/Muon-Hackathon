@@ -66,10 +66,13 @@ class Run(unittest.TestCase):
     def setUp(self):
         self._time = agent.time.time
         agent.time.time = lambda: NOW
+        agent._slot_checked = NOW  # slot length already known: no lookup call unless a test asks
 
     def tearDown(self):
         agent.time.time = self._time
         agent._brt = None
+        agent.set_slot(900)
+        agent._slot_checked = 0.0
 
     def run_agent(self, tool, args=None, message="hi", history=None, api=None):
         agent._brt = self.brt = FakeBedrock(tool, args)
@@ -112,8 +115,8 @@ class Run(unittest.TestCase):
         self.assertIn("booking slot started at 21:30", prompt)
 
     def test_off_grid_booking_is_asked_about_not_sent_to_the_api(self):
-        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:10", "end": "16:00"})
-        self.assertEqual(self.api.calls, [])
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "16:10", "end": "17:00"})
+        self.assertEqual([c[:2] for c in self.api.calls], [("GET", "/rooms/2/slots")])  # checked, not booked
         self.assertIn("Which start and end time", self.brt.formatter_input()["result"]["error"])
         self.assertIn(":00, :15, :30, :45", self.brt.calls[0]["system"][0]["text"])
 
@@ -159,18 +162,60 @@ class Run(unittest.TestCase):
         self.assertNotIn("expires_at", result)  # 5 minutes out, and it would read as an end time
         self.assertEqual(result["next_res_start"], "Sun Nov 15, 3:00 PM")
 
+    def test_agent_follows_the_apis_slot_length(self):
+        agent._slot_checked = 0.0
+        api = FakeApi()
+        rooms = api.__call__
+
+        def with_slot(method, path, body=None, query=None):
+            out = rooms(method, path, body, query)
+            return {**out, "slot_seconds": 60} if path == "/rooms" else out
+
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:07", "end": "15:08"}, api=with_slot)
+        self.assertEqual([c[:2] for c in api.calls],
+                         [("GET", "/rooms"), ("GET", "/rooms/2/slots"), ("POST", "/reservations")])
+        self.assertIn("any whole minute", self.brt.calls[0]["system"][0]["text"])
+        book = [t for t in self.brt.calls[0]["toolConfig"]["tools"] if t["toolSpec"]["name"] == "book"][0]
+        self.assertIn("any whole minute", json.dumps(book))
+
+    def test_slot_lookup_failure_keeps_the_last_length(self):
+        agent._slot_checked = 0.0
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:07", "end": "16:00"},
+                       api=FakeApi(fail=(500, "boom")))
+        self.assertEqual(agent.SLOT, 900)
+        self.assertEqual(self.brt.formatter_input()["result"], {"error": "boom"})
+
     def test_presence_is_hidden_from_the_formatter(self):
         self.run_agent("room_status", {"room_id": "2"})
         self.assertNotIn("presence", self.brt.formatter_input()["result"])
 
     def test_book_converts_local_time(self):
-        self.run_agent("book", {"room_id": "Room 2", "day": "2026-11-15", "start": "15:00", "end": "16:00"})
-        self.assertEqual(self.api.calls[0], ("POST", "/reservations",
-                                             {"room_id": "2", "start": 1794772800, "end": 1794776400}, None))
+        self.run_agent("book", {"room_id": "Room 2", "day": "2026-11-15", "start": "16:00", "end": "17:00"})
+        self.assertEqual(self.api.calls[0][3], {"from": 1794776400, "to": 1794780000})  # overlap check first
+        self.assertEqual(self.api.calls[-1], ("POST", "/reservations",
+                                              {"room_id": "2", "start": 1794776400, "end": 1794780000}, None))
         result = self.brt.formatter_input()["result"]
         self.assertNotIn("user", result)
         self.assertNotIn("res_id", result)
-        self.assertEqual((result["start"], result["end"]), ("Sun Nov 15, 3:00 PM", "Sun Nov 15, 4:00 PM"))
+        self.assertEqual((result["start"], result["end"]), ("Sun Nov 15, 4:00 PM", "Sun Nov 15, 5:00 PM"))
+
+    # FakeApi has room 2 booked 3:15-3:30 PM on Sun Nov 15.
+    def test_off_grid_request_that_overlaps_is_declined_as_a_clash(self):
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:20", "end": "15:40"})
+        self.assertNotIn("POST", [c[0] for c in self.api.calls])
+        error = self.brt.formatter_input()["result"]["error"]
+        self.assertIn("already booked 3:15 PM-3:30 PM", error)
+        self.assertIn("overlaps 3:20 PM-3:40 PM", error)
+        self.assertNotIn("Which start", error)
+
+    def test_on_grid_request_that_overlaps_is_declined_before_the_api_is_asked_to_book(self):
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:00", "end": "16:00"})
+        self.assertNotIn("POST", [c[0] for c in self.api.calls])
+        self.assertIn("already booked 3:15 PM-3:30 PM", self.brt.formatter_input()["result"]["error"])
+
+    def test_booking_right_after_another_is_not_an_overlap(self):
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:30", "end": "16:00"})
+        self.assertEqual(self.api.calls[-1][:2], ("POST", "/reservations"))
 
     def test_api_errors_are_formatted_not_raised(self):
         self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:00", "end": "16:00"},
@@ -225,8 +270,12 @@ class Run(unittest.TestCase):
 
 
 class Handler(unittest.TestCase):
+    def setUp(self):
+        agent._slot_checked = float("inf")  # never look the slot length up over the real network
+
     def tearDown(self):
         agent._brt = None
+        agent._slot_checked = 0.0
 
     def test_lambda_handler(self):
         agent._brt = FakeBedrock("out_of_scope")

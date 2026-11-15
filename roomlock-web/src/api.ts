@@ -13,6 +13,7 @@ export interface Room {
   holder?: string; // Cognito username, only while held
   yours?: boolean; // true when you are the one holding the room
   kind?: 'soft' | 'hard'; // walk-up session or checked-in booking
+  slot_seconds?: number; // booking slot length; admins can change it
 }
 
 export interface Reservation {
@@ -41,6 +42,7 @@ export interface AdminRoom {
 
 export interface AdminView {
   seconds_per_minute: number; // 60 = real time
+  slot_minutes: number; // booking slot length
   rules: Record<string, number>; // each rule's current length in seconds
   rooms: AdminRoom[];
 }
@@ -129,6 +131,7 @@ const real = {
   adminSpeed: (seconds_per_minute: number) =>
     call<AdminView>('POST', '/admin/settings', { seconds_per_minute }),
   adminDelete: (room_id: string, sk: string) => call<AdminView>('POST', '/admin/delete', { room_id, sk }),
+  adminSlot: (slot_minutes: number) => call<AdminView>('POST', '/admin/settings', { slot_minutes }),
   agent: async (message: string, history: ChatMessage[]) => {
     try {
       return await call<{ reply: string }>('POST', '/agent', { message, history });
@@ -248,11 +251,13 @@ async function mockAgent(message: string, _history: ChatMessage[]): Promise<{ re
 
 // shortcut: the demo speed dial is only displayed; the fake backend's own timers don't use it.
 let mockSpeed = 60;
+let mockSlotMinutes = 15;
 
 async function mockAdmin(): Promise<AdminView> {
   const r = (minutes: number) => Math.round(minutes * mockSpeed);
   return {
     seconds_per_minute: mockSpeed,
+    slot_minutes: mockSlotMinutes,
     rules: { extension_step: r(5), empty_room_timeout: r(10), reserved_lead: r(10), no_show: r(10), warning: r(5), early_checkin: r(5) },
     rooms: rooms.map((room) => ({
       room_id: room.room_id,
@@ -284,6 +289,10 @@ const mock = {
     const i = reservations.findIndex((r) => `RES#${r.res_id}` === sk);
     if (i < 0) throw new ApiError(`No row ${sk}`, 404);
     reservations.splice(i, 1);
+    return mockAdmin();
+  },
+  adminSlot: async (slot_minutes: number) => {
+    mockSlotMinutes = slot_minutes;
     return mockAdmin();
   },
   adminSpeed: async (seconds_per_minute: number) => {
