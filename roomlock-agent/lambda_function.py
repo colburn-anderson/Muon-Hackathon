@@ -41,7 +41,8 @@ except Exception:  # shortcut: no tzdata in the runtime -> fixed UTC-5, an hour 
 
 MAX_MESSAGE = 500
 MAX_HISTORY = 6
-SLOT = 900  # the API only books on this grid (seconds)
+SLOT = int(os.environ.get("SLOT_SECONDS", "900"))  # booking grid in seconds; must match the API's SLOT
+GRID = "any whole minute" if SLOT == 60 else ", ".join(f":{m:02d}" for m in range(0, 60, SLOT // 60))
 API_TIMEOUT = 5  # seconds per call; API Gateway gives the whole request 30
 
 OUT_OF_SCOPE = ("I can only help with the study rooms: what's free, booking, your bookings, cancelling, "
@@ -72,8 +73,8 @@ def _tool(name, desc, props=None, required=()):
 
 _ROOM = {"type": "string", "description": 'Room number, for example "2".'}
 _DAY = {"type": "string", "description": "Local date as YYYY-MM-DD."}
-_START = {"type": "string", "description": "Local start time, 24-hour HH:MM on :00, :15, :30 or :45."}
-_END = {"type": "string", "description": "Local end time, 24-hour HH:MM on :00, :15, :30 or :45. 24:00 is midnight."}
+_START = {"type": "string", "description": f"Local start time, 24-hour HH:MM, on {GRID}."}
+_END = {"type": "string", "description": f"Local end time, 24-hour HH:MM, on {GRID}. 24:00 is midnight."}
 
 TOOLS = [
     _tool("list_rooms", "Every room's status right now. Use for 'what's free now?' or 'which rooms are there?'."),
@@ -93,10 +94,10 @@ TOOLS = [
 ]
 
 ROUTER = """You route each message in a study-room booking app to exactly one tool. You never write text.
-Current local time: {now}. The current quarter hour started at {slot}. All times are this local time.
+Current local time: {now}. The current booking slot started at {slot}. All times are this local time.
 - Choose the one tool that serves the latest user message. Earlier messages are only context,
   for example "book it" refers to a room and time mentioned before.
-- Dates are YYYY-MM-DD and times are 24-hour HH:MM on the 15-minute grid. Work out "today",
+- Dates are YYYY-MM-DD and times are 24-hour HH:MM on {grid}. Work out "today",
   "tomorrow" and weekdays from the current time. "for an hour" from 15:00 means end 16:00.
 - If a booking request is missing the room, the day or the time, use free_times. Never guess them:
   a day or time counts only if the user said it. Never use the current time unless they said "now"
@@ -281,7 +282,7 @@ def brt():
 def route(message, history, now):
     resp = brt().converse(
         modelId=MODEL_ID,
-        system=[{"text": ROUTER.format(now=stamp(now), slot=datetime.fromtimestamp(now - now % SLOT, TZ).strftime("%H:%M"))}],
+        system=[{"text": ROUTER.format(now=stamp(now), grid=GRID, slot=datetime.fromtimestamp(now - now % SLOT, TZ).strftime("%H:%M"))}],
         messages=conversation(history, message),
         toolConfig={"tools": TOOLS, "toolChoice": {"any": {}}},
         inferenceConfig={"maxTokens": 300, "temperature": 0},
@@ -308,14 +309,14 @@ def act(name, args, call, now):
         if end <= now:
             raise Invalid(f"{args['day']} has already passed.")
         rooms = [room] if room else [r["room_id"] for r in call("GET", "/rooms")["rooms"]]
-        query = {"from": max(start, now - now % 900), "to": end}
+        query = {"from": max(start, now - now % SLOT), "to": end}
         return {"day": args["day"], "free": {
             str(r): free_ranges(call("GET", f"/rooms/{r}/slots", query=query)["slots"]) for r in rooms}}
     if name == "book":
         need(args, "room_id", "day", "start", "end")
         start, end = to_ts(args["day"], args["start"]), to_ts(args["day"], args["end"])
         if start % SLOT or end % SLOT:
-            raise Invalid("Bookings start and end on :00, :15, :30 or :45. Which start and end time do you want?")
+            raise Invalid(f"Bookings start and end on {GRID}. Which start and end time do you want?")
         if end <= start:
             raise Invalid("The end time must be after the start time.")
         return call("POST", "/reservations", {"room_id": room, "start": start, "end": end})

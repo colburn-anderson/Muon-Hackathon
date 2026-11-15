@@ -109,12 +109,13 @@ class Run(unittest.TestCase):
         self.run_agent("list_rooms")
         prompt = self.brt.calls[0]["system"][0]["text"]
         self.assertIn("Saturday 2026-11-14 21:30 EST", prompt)
-        self.assertIn("quarter hour started at 21:30", prompt)
+        self.assertIn("booking slot started at 21:30", prompt)
 
     def test_off_grid_booking_is_asked_about_not_sent_to_the_api(self):
         self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:10", "end": "16:00"})
         self.assertEqual(self.api.calls, [])
         self.assertIn("Which start and end time", self.brt.formatter_input()["result"]["error"])
+        self.assertIn(":00, :15, :30, :45", self.brt.calls[0]["system"][0]["text"])
 
     def test_busy_rooms_say_when_the_booking_ends_not_when_it_starts(self):
         t0 = NOW - NOW % 900  # 9:30 PM
