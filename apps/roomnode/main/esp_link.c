@@ -5,6 +5,8 @@
 
 #include "fwog_main.h"
 #include "pico/stdlib.h"
+#include "hardware/regs/uart.h"
+#include "hardware/structs/uart.h"
 #include "hardware/uart.h"
 
 #include "common/json/jhelp.h"
@@ -47,10 +49,12 @@ static room_state_t parse_state(const char *s) {
 static void handle_line(esp_link_in_t *in, char *line) {
     char t[16];
     if (!jh_string(line, "t", t, sizeof t)) {
+        in->rx_malformed++;
         return;
     }
 
     if (strcmp(t, "status") == 0) {
+        in->rx_status++;
         char state[16] = "";
         if (jh_string(line, "state", state, sizeof state)) {
             in->state = parse_state(state);
@@ -59,28 +63,35 @@ static void handle_line(esp_link_in_t *in, char *line) {
         if (!jh_string(line, "holder", in->holder, sizeof in->holder)) {
             in->holder[0] = '\0';
         }
+        if (!jh_string(line, "url", in->qr_url, sizeof in->qr_url)) {
+            in->qr_url[0] = '\0';
+        }
         double d = 0;
         in->expires_at = jh_number(line, "expires_at", &d) ? (int64_t)d : 0;
         in->next_res_start = jh_number(line, "next_res_start", &d) ? (int64_t)d : 0;
     } else if (strcmp(t, "net") == 0) {
+        in->rx_net++;
         bool up = false;
         if (jh_bool(line, "up", &up)) {
             in->net_up = up;
             in->net_valid = true;
         }
     } else if (strcmp(t, "time") == 0) {
+        in->rx_time++;
         double d = 0;
         if (jh_number(line, "epoch", &d) && d > 0) {
             in->epoch = (int64_t)d;
             in->time_valid = true;
         }
     } else if (strcmp(t, "cmd") == 0) {
+        in->rx_other++;
         double d = 0;
         if (jh_number(line, "servo", &d)) {
             in->servo_percent = (int)d;
             in->servo_valid = true;
         }
     } else if (strcmp(t, "alert") == 0) {
+        in->rx_other++;
         double d = 1;
         jh_number(line, "level", &d);
         if (!jh_string(line, "text", in->alert, sizeof in->alert)) {
@@ -88,6 +99,8 @@ static void handle_line(esp_link_in_t *in, char *line) {
         }
         in->alert_level = in->alert[0] ? (uint8_t)d : ROOM_ALERT_NONE;
         in->alert_valid = true;
+    } else {
+        in->rx_other++;
     }
     /* "hb" and "boot" are for the log only; the C6 does not send them. */
 }
@@ -100,10 +113,12 @@ void esp_link_poll(esp_link_in_t *in) {
             break;
         }
         const char c = (char)uart_getc(ESP_UART);
+        in->rx_bytes++;
 
         if (c == '\n') {
             if (!s_dropping && s_line_len > 0u) {
                 s_line[s_line_len] = '\0';
+                in->rx_lines++;
                 handle_line(in, s_line);
             }
             s_line_len = 0u;
@@ -119,11 +134,21 @@ void esp_link_poll(esp_link_in_t *in) {
              * parse against a truncated buffer. */
             s_dropping = true;
             s_line_len = 0u;
+            in->rx_overlong++;
             continue;
         }
         if (!s_dropping) {
             s_line[s_line_len++] = c;
         }
+    }
+
+    /* UARTRSR is sticky. Preserve which failure modes have ever happened and
+     * clear the hardware register so a later diagnostic can see new traffic
+     * independently. The low nibble is OE/BE/PE/FE. */
+    const uint32_t errors = uart_get_hw(ESP_UART)->rsr & UART_UARTRSR_BITS;
+    if (errors != 0u) {
+        in->rx_error_flags |= (uint8_t)errors;
+        uart_get_hw(ESP_UART)->rsr = UART_UARTRSR_BITS;
     }
 }
 
@@ -148,4 +173,8 @@ void esp_link_send_boot(const char *fw_version) {
     char line[64];
     snprintf(line, sizeof line, "{\"t\":\"boot\",\"fw\":\"%s\"}", fw_version);
     send(line);
+}
+
+void esp_link_send_end(void) {
+    send("{\"t\":\"end\"}");
 }

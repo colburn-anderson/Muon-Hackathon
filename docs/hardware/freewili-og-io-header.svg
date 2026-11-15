@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1120" viewBox="0 0 1560 1120">
+<defs><style><![CDATA[
+ .t{font-family:"DejaVu Sans","Helvetica Neue",Arial,sans-serif}
+ .h1{font-size:34px;font-weight:700;fill:#1b1f24}
+ .sub{font-size:17px;fill:#55606b}
+ .dim{font-size:16px;fill:#9aa3ad}
+ .num{font-size:20px;font-weight:700}
+ .sig{font-size:19px;font-weight:700}
+ .pin{font-size:15px}
+ .cell{font-size:17px;fill:#1b1f24}
+ .note{font-size:15.5px;fill:#1b1f24}
+]]></style></defs>
+<rect width="1560" height="1120" fill="#ffffff"/>
+<text class="t h1" x="60" y="64">FREE-WILi OG &#183; main-CPU 20-pin IO header</text>
+<text class="t sub" x="60" y="94">Room node wiring: 2&#215; GND, 5V, 3.3V, I2C0 SDA/SCL (GPIO16/17), GPIO27 (servo)</text>
+<text class="t dim" x="60" y="120">Top view, key/notch at the top edge between pins 10 and 12 &#183; pin 1 is bottom-left &#183; even pins on the top row, odd on the bottom</text>
+<rect x="100.0" y="299.0" width="1360" height="178" rx="14" fill="#111418"/>
+<path d="M 762.0 303.0 L 780.0 333.0 L 798.0 303.0" fill="none" stroke="#ffd54f" stroke-width="3"/>
+<rect x="121.0" y="311.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#c62828" stroke-width="3"/>
+<text class="t num" x="150" y="347" text-anchor="middle" fill="#c62828">2</text>
+<line x1="150" y1="311.0" x2="150" y2="295.0" stroke="#c62828" stroke-width="2.5"/>
+<text class="t sig" x="150" y="271.0" text-anchor="middle" fill="#c62828">5V OUT</text>
+<rect x="121.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="150" y="443" text-anchor="middle" fill="#8e98a3">1</text>
+<line x1="150" y1="465.0" x2="150" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="150" y="505.0" text-anchor="middle" fill="#9aa3ad">SPI1 CS</text>
+<text class="t pin" x="150" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO13</text>
+<rect x="261.0" y="311.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="3"/>
+<text class="t num" x="290" y="347" text-anchor="middle" fill="#6a1b9a">4</text>
+<line x1="290" y1="311.0" x2="290" y2="295.0" stroke="#6a1b9a" stroke-width="2.5"/>
+<text class="t sig" x="290" y="271.0" text-anchor="middle" fill="#6a1b9a">V PINS IN</text>
+<rect x="261.0" y="407.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="3"/>
+<text class="t num" x="290" y="443" text-anchor="middle" fill="#2e7d32">3</text>
+<line x1="290" y1="465.0" x2="290" y2="481.0" stroke="#2e7d32" stroke-width="2.5"/>
+<text class="t sig" x="290" y="505.0" text-anchor="middle" fill="#2e7d32">GPIO27</text>
+<text class="t pin" x="290" y="523.0" text-anchor="middle" fill="#2e7d32">OUT</text>
+<rect x="401.0" y="311.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#e07b00" stroke-width="3"/>
+<text class="t num" x="430" y="347" text-anchor="middle" fill="#e07b00">6</text>
+<line x1="430" y1="311.0" x2="430" y2="295.0" stroke="#e07b00" stroke-width="2.5"/>
+<text class="t sig" x="430" y="271.0" text-anchor="middle" fill="#e07b00">3.3V OUT</text>
+<rect x="401.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="430" y="443" text-anchor="middle" fill="#8e98a3">5</text>
+<line x1="430" y1="465.0" x2="430" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="430" y="505.0" text-anchor="middle" fill="#9aa3ad">UART1 RX</text>
+<text class="t pin" x="430" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO9</text>
+<rect x="541.0" y="311.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="3"/>
+<text class="t num" x="570" y="347" text-anchor="middle" fill="#1565c0">8</text>
+<line x1="570" y1="311.0" x2="570" y2="295.0" stroke="#1565c0" stroke-width="2.5"/>
+<text class="t sig" x="570" y="271.0" text-anchor="middle" fill="#1565c0">I2C0 SCL</text>
+<text class="t pin" x="570" y="289.0" text-anchor="middle" fill="#1565c0">GPIO17</text>
+<rect x="541.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="570" y="443" text-anchor="middle" fill="#8e98a3">7</text>
+<line x1="570" y1="465.0" x2="570" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="570" y="505.0" text-anchor="middle" fill="#9aa3ad">UART1 CTS</text>
+<text class="t pin" x="570" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO10</text>
+<rect x="681.0" y="311.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="3"/>
+<text class="t num" x="710" y="347" text-anchor="middle" fill="#1565c0">10</text>
+<line x1="710" y1="311.0" x2="710" y2="295.0" stroke="#1565c0" stroke-width="2.5"/>
+<text class="t sig" x="710" y="271.0" text-anchor="middle" fill="#1565c0">I2C0 SDA</text>
+<text class="t pin" x="710" y="289.0" text-anchor="middle" fill="#1565c0">GPIO16</text>
+<rect x="681.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="710" y="443" text-anchor="middle" fill="#8e98a3">9</text>
+<line x1="710" y1="465.0" x2="710" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="710" y="505.0" text-anchor="middle" fill="#9aa3ad">UART1 TX</text>
+<text class="t pin" x="710" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO8</text>
+<rect x="821.0" y="311.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="850" y="347" text-anchor="middle" fill="#8e98a3">12</text>
+<line x1="850" y1="311.0" x2="850" y2="295.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="850" y="271.0" text-anchor="middle" fill="#9aa3ad">SPI1 RX</text>
+<text class="t pin" x="850" y="289.0" text-anchor="middle" fill="#9aa3ad">GPIO12</text>
+<rect x="821.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="850" y="443" text-anchor="middle" fill="#8e98a3">11</text>
+<line x1="850" y1="465.0" x2="850" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="850" y="505.0" text-anchor="middle" fill="#9aa3ad">UART1 RTS</text>
+<text class="t pin" x="850" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO11</text>
+<rect x="961.0" y="311.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="990" y="347" text-anchor="middle" fill="#8e98a3">14</text>
+<line x1="990" y1="311.0" x2="990" y2="295.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="990" y="271.0" text-anchor="middle" fill="#9aa3ad">GPIO26</text>
+<text class="t pin" x="990" y="289.0" text-anchor="middle" fill="#9aa3ad">IN</text>
+<rect x="961.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="990" y="443" text-anchor="middle" fill="#8e98a3">13</text>
+<line x1="990" y1="465.0" x2="990" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="990" y="505.0" text-anchor="middle" fill="#9aa3ad">SPI1 TX</text>
+<text class="t pin" x="990" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO15</text>
+<rect x="1101.0" y="311.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="1130" y="347" text-anchor="middle" fill="#8e98a3">16</text>
+<line x1="1130" y1="311.0" x2="1130" y2="295.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="1130" y="271.0" text-anchor="middle" fill="#9aa3ad">SWCLK</text>
+<rect x="1101.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="1130" y="443" text-anchor="middle" fill="#8e98a3">15</text>
+<line x1="1130" y1="465.0" x2="1130" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="1130" y="505.0" text-anchor="middle" fill="#9aa3ad">SPI1 SCLK</text>
+<text class="t pin" x="1130" y="523.0" text-anchor="middle" fill="#9aa3ad">GPIO14</text>
+<rect x="1241.0" y="311.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="1270" y="347" text-anchor="middle" fill="#8e98a3">18</text>
+<line x1="1270" y1="311.0" x2="1270" y2="295.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="1270" y="271.0" text-anchor="middle" fill="#9aa3ad">SWDIO</text>
+<rect x="1241.0" y="407.0" width="58" height="58" rx="6" fill="#2b3138" stroke="#454d57" stroke-width="1.5"/>
+<text class="t num" x="1270" y="443" text-anchor="middle" fill="#8e98a3">17</text>
+<line x1="1270" y1="465.0" x2="1270" y2="481.0" stroke="#c2c9d1" stroke-width="1"/>
+<text class="t sig" x="1270" y="505.0" text-anchor="middle" fill="#9aa3ad">GPIO25</text>
+<text class="t pin" x="1270" y="523.0" text-anchor="middle" fill="#9aa3ad">OUT</text>
+<rect x="1381.0" y="311.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#37474f" stroke-width="3"/>
+<text class="t num" x="1410" y="347" text-anchor="middle" fill="#37474f">20</text>
+<line x1="1410" y1="311.0" x2="1410" y2="295.0" stroke="#37474f" stroke-width="2.5"/>
+<text class="t sig" x="1410" y="271.0" text-anchor="middle" fill="#37474f">GND</text>
+<rect x="1381.0" y="407.0" width="58" height="58" rx="6" fill="#ffffff" stroke="#37474f" stroke-width="3"/>
+<text class="t num" x="1410" y="443" text-anchor="middle" fill="#37474f">19</text>
+<line x1="1410" y1="465.0" x2="1410" y2="481.0" stroke="#37474f" stroke-width="2.5"/>
+<text class="t sig" x="1410" y="505.0" text-anchor="middle" fill="#37474f">GND</text>
+<path d="M 290 245.0 C 290 203.0, 430 203.0, 430 245.0" fill="none" stroke="#6a1b9a" stroke-width="3" stroke-dasharray="7 5"/>
+<text class="t pin" x="360.0" y="197.0" text-anchor="middle" fill="#6a1b9a">jumper 4&#8211;6</text>
+<text class="t sig" x="60" y="624" fill="#1b1f24">Wire list</text>
+<rect x="46" y="636" width="10" height="22" fill="#e07b00"/>
+<text class="t cell" x="66" y="654">STHS34PF80  VDD</text>
+<text class="t cell" x="360" y="654" fill="#e07b00">pin 6</text>
+<text class="t cell" x="470" y="654">3.3V out</text>
+<rect x="46" y="666" width="10" height="22" fill="#37474f"/>
+<text class="t cell" x="66" y="684">STHS34PF80  GND</text>
+<text class="t cell" x="360" y="684" fill="#37474f">pin 19</text>
+<text class="t cell" x="470" y="684">GND</text>
+<rect x="46" y="696" width="10" height="22" fill="#1565c0"/>
+<text class="t cell" x="66" y="714">STHS34PF80  SDA</text>
+<text class="t cell" x="360" y="714" fill="#1565c0">pin 10</text>
+<text class="t cell" x="470" y="714">I2C0 SDA = GPIO16</text>
+<rect x="46" y="726" width="10" height="22" fill="#1565c0"/>
+<text class="t cell" x="66" y="744">STHS34PF80  SCL</text>
+<text class="t cell" x="360" y="744" fill="#1565c0">pin 8</text>
+<text class="t cell" x="470" y="744">I2C0 SCL = GPIO17</text>
+<rect x="46" y="756" width="10" height="22" fill="#c62828"/>
+<text class="t cell" x="66" y="774">Servo       +</text>
+<text class="t cell" x="360" y="774" fill="#c62828">pin 2</text>
+<text class="t cell" x="470" y="774">5V out</text>
+<rect x="46" y="786" width="10" height="22" fill="#37474f"/>
+<text class="t cell" x="66" y="804">Servo       &#8722;</text>
+<text class="t cell" x="360" y="804" fill="#37474f">pin 20</text>
+<text class="t cell" x="470" y="804">GND, the second one</text>
+<rect x="46" y="816" width="10" height="22" fill="#2e7d32"/>
+<text class="t cell" x="66" y="834">Servo       signal</text>
+<text class="t cell" x="360" y="834" fill="#2e7d32">pin 3</text>
+<text class="t cell" x="470" y="834">GPIO27, 50 Hz PWM</text>
+<rect x="46" y="846" width="10" height="22" fill="#6a1b9a"/>
+<text class="t cell" x="66" y="864">IO level</text>
+<text class="t cell" x="360" y="864" fill="#6a1b9a">pin 4</text>
+<text class="t cell" x="470" y="864">V PINS IN &#8212; tie to pin 6 for 3.3V IO</text>
+<text class="t sig" x="60" y="928" fill="#1b1f24">Gotchas</text>
+<text class="t note" x="60" y="958" fill="#6a1b9a">1.</text>
+<text class="t note" x="88" y="958">Pin 4 (V PINS IN) powers the field side of the level shifters and the I2C buffer. Nothing on this header works until it is tied to a voltage:</text>
+<text class="t note" x="60" y="986" fill="#6a1b9a"></text>
+<text class="t note" x="88" y="986">jumper 4&#8211;6 for 3.3V parts. The Orca Maestro's “VIO Select” jumper is exactly that, so dropping the module silently kills the bus.</text>
+<text class="t note" x="60" y="1014" fill="#6a1b9a">2.</text>
+<text class="t note" x="88" y="1014">The I2C pair runs through a PCA9517 repeater, which is not a pull-up. Keep the sensor breakout's own pull-ups, or add 4.7k on SDA and SCL to 3.3V.</text>
+<text class="t note" x="60" y="1042" fill="#6a1b9a">3.</text>
+<text class="t note" x="88" y="1042">Only pins 19 and 20 are ground, and neither sits beside the I2C pair. Run both, one alongside the I2C bundle.</text>
+</svg>

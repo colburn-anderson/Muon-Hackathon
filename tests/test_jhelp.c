@@ -14,6 +14,7 @@ int main(void) {
     /* The documented GET /rooms/1 response. */
     const char *room =
         "{\"room_id\":\"1\",\"state\":\"reserved\",\"holder\":\"somebody\","
+        "\"url\":\"https://rooms.example/r/1?t=abc\","
         "\"expires_at\":1763200000,\"next_res_start\":1763203600}";
 
     char buf[64];
@@ -23,12 +24,24 @@ int main(void) {
     ASSERT_TRUE(jh_string(room, "holder", buf, sizeof buf));
     ASSERT_EQ(strcmp(buf, "somebody"), 0);
 
+    ASSERT_TRUE(jh_string(room, "url", buf, sizeof buf));
+    ASSERT_EQ(strcmp(buf, "https://rooms.example/r/1?t=abc"), 0);
+
     double n = 0;
     ASSERT_TRUE(jh_number(room, "expires_at", &n));
     ASSERT_EQ((long long)n, 1763200000LL);
 
     ASSERT_TRUE(jh_number(room, "next_res_start", &n));
     ASSERT_EQ((long long)n, 1763203600LL);
+
+    /* Device timestamps are explicitly null when they do not apply. Callers
+     * initialize to zero and a failed numeric parse preserves that mapping. */
+    n = 0;
+    ASSERT_TRUE(!jh_number("{\"expires_at\":null,\"next_res_start\":null}",
+                           "expires_at", &n));
+    ASSERT_EQ((long long)n, 0);
+    ASSERT_TRUE(!jh_number("{\"expires_at\":null,\"next_res_start\":null}",
+                           "next_res_start", &n));
 
     /* Absent key must fail, not return an empty string: callers rely on the
      * difference to decide "no command" versus "command with no text". */

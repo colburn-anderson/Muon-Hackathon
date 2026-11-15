@@ -136,9 +136,11 @@ unsigned lcd_font_expand(char c, unsigned scale, uint16_t fg, uint16_t bg,
 }
 
 #ifndef HOST_TEST
-/* Largest supported scale, which fixes the static buffer below at
- * 96*3^2 = 864 B. */
-#define LCD_MAX_SCALE 3u
+/* Largest supported scale. The room-status display uses scale 5 for short,
+ * primary words such as FREE and IN USE. This is a static .bss buffer rather
+ * than stack, so raising 3 -> 5 costs 1536 bytes of display RAM without
+ * deepening the bootloader's constrained call stack. */
+#define LCD_MAX_SCALE 5u
 
 static void draw_glyph(uint16_t x, uint16_t y, char c, unsigned scale,
                        uint16_t fg, uint16_t bg) {
@@ -149,15 +151,9 @@ static void draw_glyph(uint16_t x, uint16_t y, char c, unsigned scale,
     if (x + w > ST7789_W || y + h > ST7789_H) return;
 
     /* static, not a stack local. The final whole-branch review measured the
-       bootloader's deepest live call chain off bl_display.dis:
-       main -> bl_ui_show -> render_state -> draw_zone ->
-       lcd_text_draw_padded -> draw_glyph -> st7789_blit = 1508 bytes, of
-       which this array alone was 864 -- against a 2048-byte stack
-       (__StackTop - __StackBottom), leaving ~540 bytes for exception
-       frames and the TinyUSB tud_task() that runs off an alarm IRQ once
-       the console enumerates. That overflow would be silent, not a fault:
-       unused SCRATCH_Y sits below __StackBottom.
-       Safe as `static` because draw_glyph() is reached only from
+       bootloader's deepest live call chain is already close to its 2048-byte
+       stack. At scale 5 this array is 2400 bytes, so making it local would
+       guarantee silent stack corruption. Safe as `static` because draw_glyph() is reached only from
        lcd_text_draw()/lcd_text_draw_padded() in a plain per-glyph loop on
        the bootloader's single main thread -- no recursion, no second core,
        no reentrancy. Same idiom as apps/bl/display/main.c's s_rx (4.2 KB

@@ -33,7 +33,19 @@ static void event_handler(void *arg, esp_event_base_t base,
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *e = data;
         s_up = true;
-        ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&e->ip_info.ip));
+        ESP_LOGI(TAG, "got ip: " IPSTR " gw: " IPSTR " mask: " IPSTR,
+                 IP2STR(&e->ip_info.ip), IP2STR(&e->ip_info.gw),
+                 IP2STR(&e->ip_info.netmask));
+
+        /* What the AP actually handed us for DNS usually explains a
+         * getaddrinfo() failure that looks like a network fault. */
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_dns_info_t dns;
+        if (netif != NULL && esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK) {
+            ESP_LOGI(TAG, "dns main: " IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+        } else {
+            ESP_LOGW(TAG, "no dns from dhcp");
+        }
     }
 }
 

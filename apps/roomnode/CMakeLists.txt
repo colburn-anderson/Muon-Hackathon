@@ -5,8 +5,13 @@
 # The display half includes ../../apps/roomnode/room_state.h, which is the wire
 # format between the two: keeping it beside this file rather than inside either
 # half is what keeps each side honest about the other.
-add_executable(roomnode_display display/main.c)
-target_include_directories(roomnode_display PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# qrcodegen (Project Nayuki, MIT -- see LICENSES/qrcodegen-MIT.txt) is vendored
+# rather than depended on: a display app that stops building because a submodule
+# moved is a display that shows nothing.
+add_executable(roomnode_display display/main.c vendor/qrcodegen/qrcodegen.c)
+target_include_directories(roomnode_display PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/qrcodegen)
 target_link_libraries(roomnode_display fwog_display_bsp)
 fwog_display_app(roomnode_display
     VERSION 001

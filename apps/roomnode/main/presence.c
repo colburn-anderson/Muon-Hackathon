@@ -30,7 +30,7 @@
 #define FUNC_MOT_FLAG   0x02u
 
 /* ODR[3:0] encoding, datasheet table 16. 2 Hz: a person walking in produces
- * several samples before our 30 s absence hold could ever expire, and the
+ * several samples before our 10 s absence hold could ever expire, and the
  * current draw stays trivial. */
 #define ODR_2HZ         0x04u
 
@@ -38,6 +38,12 @@
 #define PRESENCE_HZ    400000u
 
 static bool s_ok;
+
+/* Empty-room floor for tpresence, in 1/16 LSB so the slow upward creep can be
+ * smaller than one LSB per sample. See PRESENCE_TPRES_DELTA in the header for
+ * why the verdict is an excursion from this rather than an absolute value. */
+static int64_t s_base_q4;
+static bool    s_base_valid;
 
 static bool write_u8(uint8_t reg, uint8_t value) {
     const uint8_t buf[2] = {reg, value};
@@ -144,11 +150,35 @@ presence_sample_t presence_poll(void) {
 
     /* The status read also clears DRDY, which is the documented way to release
      * the output registers for the next conversion. */
-    s.motion = (s.func_status & (FUNC_PRES_FLAG | FUNC_MOT_FLAG)) != 0;
     s.ok = true;
-
     (void)read_s16_stable(REG_TPRESENCE_L, &s.tpresence);
     (void)read_s16_stable(REG_TOBJ_COMP_L, &s.tobj_comp);
+    (void)read_s16_stable(REG_TOBJECT_L, &s.tobj_raw);
     (void)read_s16_stable(REG_TAMBIENT_L, &s.tamb_raw);
+
+    /* Track the empty-room floor. Downwards fast, so the baseline re-zeroes
+     * within a second or two once the room is empty; upwards at ~1/1024 of the
+     * gap per sample, so a person who sits still is not absorbed in a minute.
+     * At 2 Hz that is a floor of roughly 3 LSB/s against a 3000 LSB offset --
+     * about a quarter hour to swallow a real occupant, far longer than anyone
+     * sits in a meeting room without moving. */
+    const int32_t tp_q4 = (int32_t)s.tpresence * 16;
+    if (!s_base_valid) {
+        s_base_q4 = tp_q4;      /* boot assumption: the room starts empty */
+        s_base_valid = true;
+    }
+    const int64_t gap = (int64_t)tp_q4 - s_base_q4;
+    if (gap < 0) {
+        s_base_q4 += gap / 4;   /* fast follow down */
+    } else {
+        s_base_q4 += gap >> 10; /* very slow creep up */
+    }
+
+    s.tpres_base = (int16_t)(s_base_q4 / 16);
+    const int32_t delta = s.tpresence - s.tpres_base;
+    s.tpres_delta = (int16_t)delta;
+
+    /* The verdict is the excursion, not the raw value -- see the header. */
+    s.motion = delta > PRESENCE_TPRES_DELTA;
     return s;
 }

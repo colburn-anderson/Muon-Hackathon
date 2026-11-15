@@ -1,7 +1,7 @@
 # FreeWili OG room node -- ESP32-C6 (Bottlenose Orca) network side.
 #
-# Console on USB Serial/JTAG on purpose: UART0 (GPIO16/17) is the 3 Mbaud link
-# to the main CPU, and log output there would corrupt the JSON protocol.
+# Console on USB Serial/JTAG on purpose: UART0 (GPIO16/17) is the 115200-baud
+# link to the main CPU, and log output there would corrupt the JSON protocol.
 CONFIG_IDF_TARGET="esp32c6"
 
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
@@ -10,6 +10,12 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=n
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+/* HTTPS to the AWS gateway: esp_crt_bundle carries Amazon Root CA 1. The full
+ * bundle is ~60 KB of flash for the privilege of never pinning a certificate
+ * that AWS is free to rotate. */
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 
 CONFIG_ESP_WIFI_CSI_ENABLED=n
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

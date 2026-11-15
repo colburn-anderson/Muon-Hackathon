@@ -33,11 +33,33 @@
 #define PRESENCE_SDA_PIN PIN_IO_I2C_SDA
 #define PRESENCE_SCL_PIN PIN_IO_I2C_SCL
 
+/* Presence verdict: tpresence ABOVE ITS BASELINE by this much is somebody in the
+ * room.
+ *
+ * Why a delta and not an absolute value: measured on this desk, an empty chair
+ * read about -2700..-6300 one minute and pointing at the ceiling read +3000 the
+ * next. The metric is not a temperature -- it is a filtered, uncalibrated
+ * low-frequency IR signal, and its offset moves with what is in the field of
+ * view, how the board is angled, self-heating and ambient drift. Any single
+ * absolute threshold is therefore wrong within minutes, which is exactly what
+ * the first version of this file got wrong.
+ *
+ * So the driver tracks the low envelope (the empty-room floor) continuously and
+ * the verdict is the excursion above it. Fast down, very slow up: the baseline
+ * must follow the room emptying within seconds, but must not quietly absorb a
+ * person who is sitting still and then declare the room free. */
+#ifndef PRESENCE_TPRES_DELTA
+#define PRESENCE_TPRES_DELTA 1500
+#endif
+
 typedef struct {
     bool    ok;          /* sensor identified itself and answered */
     bool    motion;      /* raw per-frame verdict, before debouncing */
     uint8_t func_status; /* FUNC_STATUS: PRES_FLAG | MOT_FLAG | TAMB_SHOCK_FLAG */
     int16_t tpresence;   /* the presence algorithm's own measured value */
+    int16_t tpres_delta; /* tpresence minus the tracked empty-room baseline */
+    int16_t tpres_base;  /* the tracked baseline itself, for the log */
+    int16_t tobj_raw;    /* object temperature, raw */
     int16_t tobj_comp;   /* ambient-compensated object temperature */
     int16_t tamb_raw;    /* ambient, raw */
 } presence_sample_t;

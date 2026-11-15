@@ -13,9 +13,12 @@
 static const char *TAG = "link";
 
 #define LINK_RX_BUF   1024
-#define LINK_LINE_MAX 256
+#define LINK_LINE_MAX 448
 
 static rn_presence_cb_t s_presence_cb;
+static rn_link_cb_t     s_boot_cb;
+static rn_link_cb_t     s_end_cb;
+static rn_link_stats_t  s_stats;
 
 /* Escapes the few characters our own text can carry into an alert string.
  * The backend's reason strings are the only untrusted-ish input that reaches
@@ -49,7 +52,15 @@ static void send_line(const char *fmt, ...) {
         n = (int)(sizeof line - 2);
     }
     line[n++] = '\n';
-    uart_write_bytes(LINK_UART_NUM, line, (size_t)n);
+    const int written = uart_write_bytes(LINK_UART_NUM, line, (size_t)n);
+    s_stats.tx_lines++;
+    if (written > 0) {
+        s_stats.tx_bytes += (uint32_t)written;
+    }
+    if (written != n) {
+        s_stats.tx_short_writes++;
+        ESP_LOGW(TAG, "UART short write: %d/%d bytes", written, n);
+    }
 }
 
 void rn_link_init(void) {
@@ -76,16 +87,22 @@ void rn_link_init(void) {
 }
 
 void rn_link_on_presence(rn_presence_cb_t cb) { s_presence_cb = cb; }
+void rn_link_on_end(rn_link_cb_t cb) { s_end_cb = cb; }
+void rn_link_on_boot(rn_link_cb_t cb) { s_boot_cb = cb; }
 
-void rn_link_status(const char *state, const char *holder,
+void rn_link_status(const char *state, const char *holder, const char *url,
                     int64_t expires_at, int64_t next_res_start) {
     char esc_holder[64] = "";
+    char esc_url[224] = "";
     if (holder != NULL) {
         json_escape(holder, esc_holder, sizeof esc_holder);
     }
+    if (url != NULL) {
+        json_escape(url, esc_url, sizeof esc_url);
+    }
     send_line("{\"t\":\"status\",\"state\":\"%s\",\"holder\":\"%s\","
-              "\"expires_at\":%lld,\"next_res_start\":%lld}",
-              state != NULL ? state : "unknown", esc_holder,
+              "\"url\":\"%s\",\"expires_at\":%lld,\"next_res_start\":%lld}",
+              state != NULL ? state : "unknown", esc_holder, esc_url,
               (long long)expires_at, (long long)next_res_start);
 }
 
@@ -112,6 +129,13 @@ void rn_link_net(bool up, const char *api) {
               up ? "true" : "false", api != NULL ? api : "unknown");
 }
 
+void rn_link_get_stats(rn_link_stats_t *out) {
+    if (out != NULL) {
+        *out = s_stats;
+        out->tx_pin_high = gpio_get_level(LINK_TX_GPIO) != 0;
+    }
+}
+
 /* Handles one complete line from the main CPU. Unknown types are ignored --
  * the main CPU is allowed to grow new messages without bricking this side. */
 static void handle_line(char *line) {
@@ -130,12 +154,23 @@ static void handle_line(char *line) {
         double up = -1;
         bool present = false;
         jh_number(line, "up_s", &up);
-        jh_bool(line, "present", &present);
+        if (jh_bool(line, "present", &present) && s_presence_cb != NULL) {
+            /* Heartbeats repair the C6's belief after either CPU reboots; a
+             * transition-only presence message cannot do that by itself. */
+            s_presence_cb(present);
+        }
         ESP_LOGI(TAG, "main hb: up %ds present %d", (int)up, present ? 1 : 0);
+    } else if (strcmp(type, "end") == 0) {
+        if (s_end_cb != NULL) {
+            s_end_cb();
+        }
     } else if (strcmp(type, "boot") == 0) {
         char fw[32] = "?";
         jh_string(line, "fw", fw, sizeof fw);
         ESP_LOGI(TAG, "main CPU booted: %s", fw);
+        if (s_boot_cb != NULL) {
+            s_boot_cb();
+        }
     } else {
         ESP_LOGD(TAG, "ignoring type %s", type);
     }
