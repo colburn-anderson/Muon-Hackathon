@@ -7,21 +7,24 @@ Table: roomlock-db, single-table design
   sk = "STATE"                 live room status: presence, presence_seen_at,
                                res_active, session{res_id,user,kind,started_at,expires_at}
   sk = "RES#<res_id>"          one booking: start_ts, end_ts, user, checked_in, status
-  sk = "SLOT#YYYY-MM-DDTHH:MMZ" one taken 15-min slot: res_id, kind
-  room_id "_admin", sk "SETTINGS"  admin speed dial: seconds_per_minute. Not a room:
+  sk = "SLOT#YYYY-MM-DDTHH:MMZ" one taken slot (15 min unless an admin changed it): res_id, kind
+  room_id "_admin", sk "SETTINGS"  admin settings: seconds_per_minute, slot_minutes. Not a room:
                                every room scan filters on sk = "STATE".
 
 Invariant the whole file relies on:
-  every 15-min window that someone holds has a SLOT# row, and every write that
+  every slot-sized window that someone holds has a SLOT# row, and every write that
   takes a window does a conditional put (attribute_not_exists). That is the
   only place double-booking is prevented, so it can't be bypassed.
   An active session owns every SLOT# row covering [now, expires_at).
+  All live SLOT# rows share one slot length, which is why the admin can only change it
+  while no current or future slot is taken.
 
 Env vars:
   TABLE_NAME          default "roomlock-db"
   SECONDS_PER_MINUTE  default 60. Set to 6 for the demo clock (plan §8).
                       Scales the rule durations, NOT the 15-min slot size.
                       The admin page's setting (the SETTINGS row) overrides it.
+  SLOT_MINUTES        default 15. Booking slot length; the SETTINGS row overrides it.
   DEVICE_KEYS         JSON {"1": "<key>", ...}. Put it in the Lambda config, not git.
   ALLOW_DEV_USER      "1" lets an x-user header stand in for Cognito (local testing only).
 """
@@ -43,8 +46,15 @@ SITE_URL = os.environ.get("SITE_URL", "https://main.d24j7edplzktpl.amplifyapp.co
 DEFAULT_MINUTE = float(os.environ.get("SECONDS_PER_MINUTE", "60"))
 SETTINGS_KEY = {"room_id": "_admin", "sk": "SETTINGS"}
 
-SLOT = 900                      # 15 min, real seconds (fixed by the key format)
-MAX_SLOTS = 96                  # 24 h. DynamoDB transactions cap at 100 items.
+DEFAULT_SLOT_MINUTES = int(os.environ.get("SLOT_MINUTES", "15"))
+SLOT_CHOICES = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60)  # divide an hour; the key format has minute resolution
+SLOT = DEFAULT_SLOT_MINUTES * 60  # booking slot length in seconds; set_slot() changes it
+MAX_SLOTS = 96                  # 24 h at 15-min slots. DynamoDB transactions cap at 100 items.
+
+
+def set_slot(minutes):
+    global SLOT
+    SLOT = int(minutes) * 60
 
 
 def set_speed(seconds_per_minute):
@@ -97,7 +107,7 @@ def slot_ts(sk):
 
 
 def slots_covering(start, end):
-    """Start times of every 15-min slot that overlaps [start, end)."""
+    """Start times of every slot that overlaps [start, end)."""
     return list(range(slot_floor(start), end, SLOT))
 
 
@@ -321,6 +331,7 @@ def room_view(room_id, st, user=None):
         "presence": is_present(st),
         "expires_at": int(sess["expires_at"]) if sess else None,
         "next_res_start": nxt,
+        "slot_seconds": SLOT,
     }
     if sess and user:  # web routes are all behind the login check, so holder is safe here
         view["holder"] = sess["user"]
@@ -334,7 +345,7 @@ def room_view(room_id, st, user=None):
 def h_list_rooms(ev, user):
     items = table().scan(FilterExpression=Attr("sk").eq("STATE"))["Items"]
     rooms = sorted(items, key=lambda i: str(i["room_id"]))
-    return {"rooms": [room_view(r["room_id"], r, user) for r in rooms]}
+    return {"rooms": [room_view(r["room_id"], r, user) for r in rooms], "slot_seconds": SLOT}
 
 
 def h_get_room(ev, user):
@@ -343,7 +354,7 @@ def h_get_room(ev, user):
 
 
 def h_slots(ev, user):
-    """Booked and free 15-min slots between ?from= and ?to= (epoch seconds)."""
+    """Booked and free slots between ?from= and ?to= (epoch seconds)."""
     rid = ev["pathParameters"]["id"]
     get_state(rid)
     q = ev.get("queryStringParameters") or {}
@@ -500,14 +511,14 @@ def h_book(ev, user):
     except (KeyError, TypeError, ValueError):
         raise ApiError(400, "room_id, start and end (epoch seconds) are required")
     if start % SLOT or end % SLOT:
-        raise ApiError(400, "start and end must be on 15-minute boundaries")
+        raise ApiError(400, f"start and end must be on {SLOT // 60}-minute boundaries")
     if end <= start:
         raise ApiError(400, "end must be after start")
     if start < slot_floor(now()):
         raise ApiError(400, "can't book in the past")
     n = (end - start) // SLOT
     if n > MAX_SLOTS:
-        raise ApiError(400, "max booking is 24 hours")
+        raise ApiError(400, f"max booking is {MAX_SLOTS * SLOT // 60} minutes")
     get_state(rid)  # clean 404 instead of a generic 409
     res_id = "r_" + uuid.uuid4().hex[:10]
     ops = [
@@ -570,6 +581,7 @@ def load_settings():
         print(json.dumps({"settings_unreadable": str(e)}))
         item = {}
     set_speed(item.get("seconds_per_minute", DEFAULT_MINUTE))
+    set_slot(item.get("slot_minutes", DEFAULT_SLOT_MINUTES))
 
 
 def is_admin(ev):
@@ -612,6 +624,7 @@ def h_admin(ev, user):
     items = table().scan(FilterExpression=Attr("sk").eq("STATE"))["Items"]
     return {
         "seconds_per_minute": MINUTE,
+        "slot_minutes": SLOT // 60,
         "rules": {"extension_step": TICK, "empty_room_timeout": VOID, "reserved_lead": SOFT_LEAD,
                   "no_show": NO_SHOW, "warning": WARN, "early_checkin": EARLY_CHECKIN},
         "rooms": [admin_room(i) for i in sorted(items, key=lambda i: str(i["room_id"]))],
@@ -658,20 +671,55 @@ def h_admin_delete(ev, user):
     return h_admin(ev, user)
 
 
+def live_slot_rooms():
+    """Rooms holding a SLOT# row that is current or in the future, under the current slot length."""
+    t, rooms, kw = now(), set(), {}
+    while True:  # every page: this check guards the double-booking invariant, so it can't skip any
+        resp = table().scan(FilterExpression=Attr("sk").begins_with("SLOT#"), **kw)
+        rooms |= {r["room_id"] for r in resp["Items"] if slot_ts(r["sk"]) + SLOT > t}
+        if "LastEvaluatedKey" not in resp:
+            return sorted(rooms, key=str)
+        kw = {"ExclusiveStartKey": resp["LastEvaluatedKey"]}
+
+
 def h_admin_settings(ev, user):
-    try:
-        spm = float(body(ev)["seconds_per_minute"])
-    except (KeyError, TypeError, ValueError):
-        raise ApiError(400, "seconds_per_minute (a number) is required")
-    if not 1 <= spm <= 60:  # below 1, the 5-minute rules round down to 0 s and sessions stop extending
-        raise ApiError(400, "seconds_per_minute must be between 1 and 60")
+    """Body: {"seconds_per_minute": n} and/or {"slot_minutes": n}."""
+    b = body(ev)
+    sets, values = [], {}
+    if "seconds_per_minute" in b:
+        try:
+            spm = float(b["seconds_per_minute"])
+        except (TypeError, ValueError):
+            raise ApiError(400, "seconds_per_minute must be a number")
+        if not 1 <= spm <= 60:  # below 1, the 5-minute rules round down to 0 s and sessions stop extending
+            raise ApiError(400, "seconds_per_minute must be between 1 and 60")
+        sets.append("seconds_per_minute = :m")
+        values[":m"] = Decimal(str(spm))
+    if "slot_minutes" in b:
+        slot_min = b["slot_minutes"]
+        if slot_min not in SLOT_CHOICES or isinstance(slot_min, bool):
+            raise ApiError(400, f"slot_minutes must be one of {', '.join(map(str, SLOT_CHOICES))}")
+        slot_min = int(slot_min)  # JSON 15.0 -> 15; DynamoDB rejects floats
+        if slot_min * 60 != SLOT:
+            # shortcut: check-then-set, so a booking made in the same instant could slip in; fine for admin use
+            busy = live_slot_rooms()
+            if busy:
+                raise ApiError(409, "can't change the slot length while slots are taken in room "
+                               + ", ".join(map(str, busy)) + ". End those sessions and delete upcoming bookings first")
+        sets.append("slot_minutes = :s")
+        values[":s"] = slot_min
+    if not sets:
+        raise ApiError(400, "send seconds_per_minute and/or slot_minutes")
     table().update_item(  # update, not put: the role already has UpdateItem for presence
         Key=SETTINGS_KEY,
-        UpdateExpression="SET seconds_per_minute = :m, updated_by = :u, updated_at = :t",
-        ExpressionAttributeValues={":m": Decimal(str(spm)), ":u": user, ":t": now()},
+        UpdateExpression="SET " + ", ".join(sets + ["updated_by = :u", "updated_at = :t"]),
+        ExpressionAttributeValues={**values, ":u": user, ":t": now()},
     )
-    set_speed(spm)
-    print(json.dumps({"admin_speed": spm, "by": user}))
+    if ":m" in values:
+        set_speed(values[":m"])
+    if ":s" in values:
+        set_slot(values[":s"])
+    print(json.dumps({"admin_settings": {k: str(v) for k, v in values.items()}, "by": user}))
     return h_admin(ev, user)
 
 

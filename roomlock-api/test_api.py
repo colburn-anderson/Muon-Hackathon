@@ -87,12 +87,14 @@ class FakeTable:
         return {"Item": dict(item)} if item else {}
 
     def update_item(self, Key, UpdateExpression, ExpressionAttributeValues=None, **kw):
-        assert UpdateExpression.startswith("SET seconds_per_minute"), UpdateExpression
-        v = ExpressionAttributeValues
-        self.items[(Key["room_id"], Key["sk"])] = {
-            **Key, "seconds_per_minute": v[":m"], "updated_by": v[":u"], "updated_at": v[":t"]}
+        """Only the settings write uses this here: "SET a = :x, b = :y"."""
+        assert UpdateExpression.startswith("SET "), UpdateExpression
+        item = self.items.setdefault((Key["room_id"], Key["sk"]), dict(Key))
+        for part in UpdateExpression[4:].split(","):
+            name, ref = (x.strip() for x in part.split("="))
+            item[name] = ExpressionAttributeValues[ref]
 
-    def scan(self, FilterExpression):
+    def scan(self, FilterExpression, ExclusiveStartKey=None):
         return {"Items": [dict(i) for i in self.items.values() if matches(i, FilterExpression)]}
 
     def query(self, KeyConditionExpression, ConsistentRead=False):
@@ -122,6 +124,7 @@ class Admin(unittest.TestCase):
     def tearDown(self):
         api._table = None
         api.set_speed(60)
+        api.set_slot(15)
 
     def call(self, *a, **kw):
         out = api.lambda_handler(event(*a, **kw))
@@ -215,6 +218,37 @@ class Admin(unittest.TestCase):
                     {"seconds_per_minute": "nan"}, {}]:
             self.assertEqual(self.call("POST /admin/settings", body=bad)[0], 400, bad)
         self.assertNotIn(("_admin", "SETTINGS"), self.table.items)
+
+    def test_slot_length_can_change_when_nothing_is_booked(self):
+        t = api.slot_floor(api.now())
+        self.add("3", api.slot_sk(t - 3600), res_id="s_old", kind="soft")  # past rows don't block
+        status, out = self.call("POST /admin/settings", body={"slot_minutes": 1})
+        self.assertEqual((status, out["slot_minutes"], api.SLOT), (200, 1, 60))
+        api.set_slot(15)  # a fresh container reads it back
+        self.assertEqual(self.call("GET /admin")[1]["slot_minutes"], 1)
+        rooms = api.lambda_handler(event("GET /rooms"))
+        self.assertEqual(json.loads(rooms["body"])["slot_seconds"], 60)
+        self.assertEqual(json.loads(rooms["body"])["rooms"][0]["slot_seconds"], 60)
+
+    def test_slot_length_change_is_refused_while_slots_are_taken(self):
+        t = self.bookings()  # room 2 has a booking and a stray slot ahead
+        status, text = self.call("POST /admin/settings", body={"slot_minutes": 5})
+        self.assertEqual(status, 409)
+        self.assertIn("room 2", text)
+        self.assertEqual(api.SLOT, 900)
+        self.assertNotIn(("_admin", "SETTINGS"), self.table.items)
+        self.assertEqual(self.call("POST /admin/settings", body={"slot_minutes": 15})[0], 200)  # no change is fine
+        self.assertIn(("2", api.slot_sk(t + 900)), self.table.items)
+
+    def test_slot_length_rejects_lengths_that_do_not_divide_an_hour(self):
+        for bad in [7, 0, 90, "15", True, None]:
+            self.assertEqual(self.call("POST /admin/settings", body={"slot_minutes": bad})[0], 400, bad)
+
+    def test_booking_errors_name_the_current_slot_length(self):
+        self.add("_admin", "SETTINGS", slot_minutes=5)  # every request reads the setting from the table
+        t = api.slot_floor(api.now()) + 3600
+        out = api.lambda_handler(event("POST /reservations", body={"room_id": "2", "start": t + 60, "end": t + 600}))
+        self.assertEqual((out["statusCode"], out["body"]), (400, "Start and end must be on 5-minute boundaries"))
 
     def test_unreadable_settings_fall_back_instead_of_breaking_the_api(self):
         api._table = FakeTable(fail_get=True)
