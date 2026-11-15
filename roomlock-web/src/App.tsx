@@ -359,8 +359,7 @@ function MyBookingsPage() {
   );
 }
 
-const SUGGESTIONS = ['Is anything free right now?', 'Book room 2 for an hour', 'What are my reservations?'];
-
+const SUGGESTIONS = ['Is anything free right now?', 'Book room 1 now for an hour', "I'm here", 'What are my bookings?'];
 function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
