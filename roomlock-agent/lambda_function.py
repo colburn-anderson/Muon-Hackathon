@@ -229,6 +229,20 @@ def free_ranges(slots):
     return [f"{clock(a)}-{clock(b)}" for a, b in out]
 
 
+def taken_within(call, room_id, start, end):
+    """Taken stretches of the room that overlap [start, end), merged: [[from, to], ...].
+    Works for any start and end; the API rounds the range out to its slots."""
+    out = []
+    for s in call("GET", f"/rooms/{room_id}/slots", query={"from": start, "to": end})["slots"]:
+        if s["free"] or s["end"] <= start or s["start"] >= end:
+            continue
+        if out and out[-1][1] == s["start"]:
+            out[-1][1] = s["end"]
+        else:
+            out.append([s["start"], s["end"]])
+    return out
+
+
 def free_again(call, room_id, now):
     """When a reserved room is next free: the end of the first run of taken slots from now on.
     The room view only says when the next booking starts, never when it ends."""
@@ -343,10 +357,17 @@ def act(name, args, call, now):
     if name == "book":
         need(args, "room_id", "day", "start", "end")
         start, end = to_ts(args["day"], args["start"]), to_ts(args["day"], args["end"])
-        if start % SLOT or end % SLOT:
-            raise Invalid(f"Bookings start and end on {GRID}. Which start and end time do you want?")
         if end <= start:
             raise Invalid("The end time must be after the start time.")
+        # Overlap first, for any times: an off-grid request that clashes is declined as a clash,
+        # not answered with a question about the slot grid.
+        clash = taken_within(call, room, start, end)
+        if clash:
+            spans = ", ".join(f"{clock(a)}-{clock(b)}" for a, b in clash)
+            raise Invalid(f"Room {room} is already booked {spans} on {args['day']}, which overlaps "
+                          f"{clock(start)}-{clock(end)}. Pick a time that doesn't overlap.")
+        if start % SLOT or end % SLOT:
+            raise Invalid(f"Bookings start and end on {GRID}. Which start and end time do you want?")
         return call("POST", "/reservations", {"room_id": room, "start": start, "end": end})
     if name == "cancel":
         need(args, "room_id", "day", "start")
