@@ -5,7 +5,6 @@ import {
   api,
   isAdmin,
   SLOT,
-  toSlot,
   USING_MOCK,
   type AdminView,
   type ChatMessage,
@@ -162,14 +161,16 @@ function RoomsPage() {
   );
 }
 
-function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => void }) {
+// slot: the API's booking slot length in seconds. Starts round down to it; lengths are multiples of it.
+function ReserveCard({ roomId, slot, onDone }: { roomId: string; slot: number; onDone: (n: Note) => void }) {
   const [start, setStart] = useState(defaultStart);
   const [minutes, setMinutes] = useState(60);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const s = toSlot(Math.floor(new Date(start).getTime() / 1000));
+    const t = Math.floor(new Date(start).getTime() / 1000);
+    const s = t - (t % slot);
     if (!start || Number.isNaN(s)) return onDone({ tone: 'error', text: 'Pick a start time.' });
     setBusy(true);
     try {
@@ -190,21 +191,24 @@ function ReserveCard({ roomId, onDone }: { roomId: string; onDone: (n: Note) => 
       <h2>Reserve this room</h2>
       <label className="field">
         <span>Start</span>
-        <input type="datetime-local" step={SLOT} value={start} onChange={(e) => setStart(e.target.value)} />
+        <input type="datetime-local" step={slot} value={start} onChange={(e) => setStart(e.target.value)} />
       </label>
       <div className="field">
         <span>Length</span>
         <div className="chips">
-          {[30, 60, 90, 120].map((m) => (
-            <button
-              type="button"
-              key={m}
-              className={`chip ${m === minutes ? 'on' : ''}`}
-              onClick={() => setMinutes(m)}
-            >
-              {m < 60 ? `${m} min` : `${m / 60} h`}
-            </button>
-          ))}
+          {[...new Set([slot / 60, (2 * slot) / 60, 30, 60, 90, 120])]
+            .filter((m) => (m * 60) % slot === 0)
+            .sort((a, b) => a - b)
+            .map((m) => (
+              <button
+                type="button"
+                key={m}
+                className={`chip ${m === minutes ? 'on' : ''}`}
+                onClick={() => setMinutes(m)}
+              >
+                {m < 60 ? `${m} min` : `${m / 60} h`}
+              </button>
+            ))}
         </div>
       </div>
       <button className="btn primary" disabled={busy}>
@@ -309,6 +313,7 @@ function RoomPage({ checkout = false }: { checkout?: boolean }) {
       {!checkout && (
         <ReserveCard
           roomId={roomId}
+          slot={room.slot_seconds ?? SLOT}
           onDone={(n) => {
             setNote(n);
             load();
@@ -468,6 +473,27 @@ function AdminPage() {
               Save
             </button>
           </form>
+
+          <div className="card">
+            <h2>Booking slot length</h2>
+            <p className="muted">
+              Bookings start and end on <strong>{view.slot_minutes}-minute</strong> slots. To change it, every room
+              must be clear: end live sessions and delete upcoming bookings below first, or the change is refused.
+            </p>
+            <div className="chips">
+              {[1, 5, 10, 15, 30, 60].map((m) => (
+                <button
+                  type="button"
+                  key={m}
+                  className={`chip ${m === view.slot_minutes ? 'on' : ''}`}
+                  disabled={busy || m === view.slot_minutes}
+                  onClick={() => run(() => api.adminSlot(m), `Bookings now use ${m}-minute slots.`)}
+                >
+                  {m < 60 ? `${m} min` : '1 h'}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <h2>Rooms</h2>
           {view.rooms.map((r) => (
