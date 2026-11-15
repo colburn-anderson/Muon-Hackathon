@@ -38,6 +38,8 @@ class FakeApi:
             return {"res_id": "r_1", "user": "ann", **body}
         if method == "DELETE":
             return {"cancelled": path.rsplit("/", 1)[1]}
+        if method == "POST" and path.endswith("/checkin"):
+            return {"room_id": path.split("/")[2], "state": "held", "yours": True}
         if method == "POST" and path.endswith("/end"):
             return {"room_id": path.split("/")[2], "state": "free"}
         raise ApiFail(404, f"No route {method} {path}")
@@ -184,6 +186,71 @@ class Run(unittest.TestCase):
                        api=FakeApi(fail=(500, "boom")))
         self.assertEqual(agent.SLOT, 900)
         self.assertEqual(self.brt.formatter_input()["result"], {"error": "boom"})
+
+    # "I'm here". FakeApi: room 2 booked Sun 3:00-4:00 PM (r_9); room 1's booking is long past.
+    def at(self, t):
+        agent.time.time = lambda: t
+        agent._slot_checked = t
+
+    def test_im_here_checks_in_to_the_booking_on_now_and_unlocks(self):
+        self.at(T15 + 60)
+        self.run_agent("check_in", {}, message="I'm here")
+        self.assertEqual(self.api.calls[-1][:2], ("POST", "/rooms/2/checkin"))
+        self.assertEqual(self.brt.formatter_input()["result"],
+                         {"checked_in": {"room_id": "2", "until": "Sun Nov 15, 4:00 PM", "door": "unlocked"}})
+
+    def test_im_here_works_from_5_minutes_before_the_start(self):
+        self.at(T15 - 240)
+        self.run_agent("check_in", {})
+        self.assertEqual(self.api.calls[-1][:2], ("POST", "/rooms/2/checkin"))
+
+    def test_im_here_too_early_says_when_the_booking_is(self):
+        self.at(T15 - 600)
+        self.run_agent("check_in", {})
+        self.assertNotIn("POST", [c[0] for c in self.api.calls])
+        error = self.brt.formatter_input()["result"]["error"]
+        self.assertIn("room 2 at Sun Nov 15, 3:00 PM", error)
+        self.assertIn("from 5 minutes before", error)
+
+    def test_im_here_in_a_room_you_did_not_book(self):
+        self.at(T15 + 60)
+        self.run_agent("check_in", {"room_id": "3"})
+        self.assertNotIn("POST", [c[0] for c in self.api.calls])
+        self.assertIn("You don't have a booking in room 3", self.brt.formatter_input()["result"]["error"])
+
+    def test_im_here_with_two_bookings_on_asks_which_room(self):
+        self.at(T15 + 60)
+        api = FakeApi()
+        base = api.__call__
+
+        def two(method, path, body=None, query=None):
+            if (method, path) == ("GET", "/reservations"):
+                api.calls.append((method, path, body, query))
+                return {"reservations": [{"res_id": "a", "room_id": "1", "start": T15, "end": T15 + 900},
+                                         {"res_id": "b", "room_id": "2", "start": T15, "end": T15 + 900}]}
+            return base(method, path, body, query)
+
+        self.run_agent("check_in", {}, api=two)
+        self.assertNotIn("POST", [c[0] for c in api.calls])
+        self.assertIn("rooms 1 and 2 right now. Which room", self.brt.formatter_input()["result"]["error"])
+
+    def test_im_here_passes_on_the_servers_refusal(self):
+        self.at(T15 + 60)
+        api = FakeApi()
+        base = api.__call__
+
+        def held(method, path, body=None, query=None):
+            if path.endswith("/checkin"):
+                raise ApiFail(409, "Room is still held by someone else")
+            return base(method, path, body, query)
+
+        self.run_agent("check_in", {}, api=held)
+        self.assertEqual(self.brt.formatter_input()["result"], {"error": "Room is still held by someone else"})
+
+    def test_router_offers_check_in_and_the_refusal_mentions_it(self):
+        self.run_agent("list_rooms")
+        self.assertIn("check_in", [t["toolSpec"]["name"] for t in self.brt.calls[0]["toolConfig"]["tools"]])
+        self.assertIn("I'm here", agent.OUT_OF_SCOPE)
 
     def test_presence_is_hidden_from_the_formatter(self):
         self.run_agent("room_status", {"room_id": "2"})
