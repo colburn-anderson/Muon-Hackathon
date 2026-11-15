@@ -31,10 +31,18 @@ export interface AdminSession {
   expires_at: number; // epoch seconds, the next extension point
 }
 
+export interface AdminRoom {
+  room_id: string;
+  presence: boolean;
+  session: AdminSession | null;
+  reservations: { sk: string; user?: string; start: number; end: number; status?: string }[]; // newest first
+  stray_slots: { sk: string; start: number; res_id: string }[]; // blocking slots nothing owns
+}
+
 export interface AdminView {
   seconds_per_minute: number; // 60 = real time
   rules: Record<string, number>; // each rule's current length in seconds
-  rooms: { room_id: string; presence: boolean; session: AdminSession | null }[];
+  rooms: AdminRoom[];
 }
 
 export interface ChatMessage {
@@ -83,11 +91,18 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(`${API_URL}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    // The browser hides the reason ("Load failed" / "Failed to fetch"). Usually no network, or a
+    // route API Gateway doesn't have: its not-found reply carries no CORS headers.
+    throw new ApiError(`Couldn't reach the server for ${method} ${path.split('?')[0]}. Check your connection, or that this route exists in API Gateway.`, 0);
+  }
   const text = await res.text();
   if (!res.ok) {
     if (res.status === 401) throw new ApiError('Your sign-in expired. Sign out and sign back in.', 401);
@@ -113,6 +128,7 @@ const real = {
   adminEnd: (id: string) => call<AdminView>('POST', `/admin/rooms/${id}/end`),
   adminSpeed: (seconds_per_minute: number) =>
     call<AdminView>('POST', '/admin/settings', { seconds_per_minute }),
+  adminDelete: (room_id: string, sk: string) => call<AdminView>('POST', '/admin/delete', { room_id, sk }),
   agent: async (message: string, history: ChatMessage[]) => {
     try {
       return await call<{ reply: string }>('POST', '/agent', { message, history });
@@ -245,6 +261,11 @@ async function mockAdmin(): Promise<AdminView> {
         room.holderEmail && room.expires_at
           ? { res_id: `s_${room.room_id}`, user: room.holderEmail, kind: room.kind ?? 'soft', started_at: now(), expires_at: room.expires_at }
           : null,
+      reservations: reservations
+        .filter((r) => r.room_id === room.room_id)
+        .sort((a, b) => b.start - a.start)
+        .map((r) => ({ sk: `RES#${r.res_id}`, user: r.user, start: r.start, end: r.end, status: asReservation(r).status })),
+      stray_slots: [],
     })),
   };
 }
@@ -257,6 +278,12 @@ const mock = {
     room.holderEmail = undefined;
     room.expires_at = null;
     room.kind = undefined;
+    return mockAdmin();
+  },
+  adminDelete: async (_room_id: string, sk: string) => {
+    const i = reservations.findIndex((r) => `RES#${r.res_id}` === sk);
+    if (i < 0) throw new ApiError(`No row ${sk}`, 404);
+    reservations.splice(i, 1);
     return mockAdmin();
   },
   adminSpeed: async (seconds_per_minute: number) => {

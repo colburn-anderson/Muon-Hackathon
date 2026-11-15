@@ -469,31 +469,58 @@ function AdminPage() {
             </button>
           </form>
 
-          <h2>Sessions</h2>
+          <h2>Rooms</h2>
           {view.rooms.map((r) => (
-            <div key={r.room_id} className="card booking">
-              <div className="booking-when">
-                <strong>Room {r.room_id}</strong>
-                <span className="muted">
-                  {r.session
-                    ? `${r.session.kind === 'hard' ? 'Booking' : 'Walk-up'} by ${r.session.user.slice(0, 8)}, since ${clock(r.session.started_at)}, extends at ${clock(r.session.expires_at)}`
-                    : 'No session'}
-                  {r.presence ? ' · sensor sees someone' : ''}
-                </span>
+            <div key={r.room_id} className="card">
+              <div className="admin-row">
+                <div className="booking-when">
+                  <strong>Room {r.room_id}</strong>
+                  <span className="muted">
+                    {r.session
+                      ? `${r.session.kind === 'hard' ? 'Booking' : 'Walk-up'} by ${r.session.user.slice(0, 8)}, since ${clock(r.session.started_at)}, extends at ${clock(r.session.expires_at)}`
+                      : 'No session'}
+                    {r.presence ? ' · sensor sees someone' : ''}
+                  </span>
+                </div>
+                {r.session && (
+                  <button
+                    className="btn danger small"
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm(`End the session in room ${r.room_id}? Whoever holds it loses the room.`)) {
+                        run(() => api.adminEnd(r.room_id), `Ended the session in room ${r.room_id}.`);
+                      }
+                    }}
+                  >
+                    End session
+                  </button>
+                )}
               </div>
-              {r.session && (
-                <button
-                  className="btn danger small"
-                  disabled={busy}
-                  onClick={() => {
-                    if (window.confirm(`End the session in room ${r.room_id}? Whoever holds it loses the room.`)) {
-                      run(() => api.adminEnd(r.room_id), `Ended the session in room ${r.room_id}.`);
-                    }
-                  }}
-                >
-                  End session
-                </button>
-              )}
+              {[
+                ...r.reservations.map((b) => ({
+                  sk: b.sk,
+                  what: `Booking ${day(b.start)}, ${clock(b.start)} to ${clock(b.end)} by ${(b.user ?? '?').slice(0, 8)} (${b.status ?? '?'})`,
+                })),
+                ...r.stray_slots.map((x) => ({
+                  sk: x.sk,
+                  what: `Stray slot ${clock(x.start)}, blocking that time (left by ${x.res_id})`,
+                })),
+              ].map((row) => (
+                <div key={row.sk} className="admin-row admin-sub">
+                  <span className="muted">{row.what}</span>
+                  <button
+                    className="btn danger small"
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm(`Delete this from room ${r.room_id}?\n${row.what}`)) {
+                        run(() => api.adminDelete(r.room_id, row.sk), `Deleted from room ${r.room_id}.`);
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
             </div>
           ))}
         </>
