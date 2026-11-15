@@ -237,7 +237,7 @@ function RoomPage({ me }: { me: string }) {
   const inUse = room.state === 'held' || room.state === 'warn';
   return (
     <>
-      <Link to="/" className="back">
+      <Link to="/rooms" className="back">
         ← All rooms
       </Link>
       <section className="hero">
@@ -350,7 +350,11 @@ function MyBookingsPage() {
   );
 }
 
-const SUGGESTIONS = ['Is anything free right now?', 'Book room 2 for an hour', 'What are my reservations?'];
+const SUGGESTIONS = [
+  'Is anything free right now?',
+  'Book room 2 tomorrow at 3pm for an hour',
+  'What are my bookings?',
+];
 
 function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -383,10 +387,12 @@ function AssistantPage() {
     <div className="chat">
       <div className="page-head">
         <h1>Assistant</h1>
-        <p className="muted">Ask in plain English. It can check rooms and book them for you.</p>
+        <p className="muted">Ask about the study rooms in plain English: what's free, booking, your bookings, cancelling.</p>
       </div>
       <div className="chat-log">
-        <div className="bubble assistant">Hi! I can tell you what's free and book a room for you. What do you need?</div>
+        <div className="bubble assistant">
+          I can check which rooms are free, book one for you, and show or cancel your bookings. What do you need?
+        </div>
         {messages.map((m, i) => (
           <div key={i} className={`bubble ${m.role}`}>
             {m.content}
@@ -436,10 +442,10 @@ export default function App() {
               </Link>
               <nav className="nav">
                 <NavLink to="/" end>
-                  Rooms
+                  Assistant
                 </NavLink>
+                <NavLink to="/rooms">Rooms</NavLink>
                 <NavLink to="/me">My bookings</NavLink>
-                <NavLink to="/assistant">Assistant</NavLink>
               </nav>
               <button className="btn ghost small" onClick={signOut} title={me}>
                 Sign out
@@ -448,10 +454,11 @@ export default function App() {
             {USING_MOCK && <div className="demo-banner">Demo mode: fake data that resets when you refresh</div>}
             <main className="content">
               <Routes>
-                <Route path="/" element={<RoomsPage me={me} />} />
+                {/* The assistant is the front door; /r/:roomId stays direct because the QR code opens it. */}
+                <Route path="/" element={<AssistantPage />} />
+                <Route path="/rooms" element={<RoomsPage me={me} />} />
                 <Route path="/r/:roomId" element={<RoomPage me={me} />} />
                 <Route path="/me" element={<MyBookingsPage />} />
-                <Route path="/assistant" element={<AssistantPage />} />
               </Routes>
             </main>
           </div>

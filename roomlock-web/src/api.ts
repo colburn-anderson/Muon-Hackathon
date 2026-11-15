@@ -8,6 +8,7 @@ export interface Room {
   holder?: string;
   expires_at?: number; // epoch seconds
   next_res_start?: number; // epoch seconds
+  yours?: boolean; // real API only: the holder is the signed-in user
 }
 
 export interface Reservation {
@@ -54,13 +55,22 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+// The API's holder is a Cognito username; the UI compares it to the user's email, so use "yours".
+const fixRoom = async (r: Room): Promise<Room> => (r.yours ? { ...r, holder: await currentUserEmail() } : r);
+
 const real = {
-  getRooms: () => call<Room[]>('GET', '/rooms'),
-  getRoom: (id: string) => call<Room>('GET', `/rooms/${id}`),
-  claim: (id: string) => call<Room>('POST', `/rooms/${id}/claim`),
-  checkIn: (id: string) => call<Room>('POST', `/rooms/${id}/checkin`),
-  end: (id: string) => call<Room>('POST', `/rooms/${id}/end`),
-  myReservations: () => call<Reservation[]>('GET', '/reservations?mine=true'),
+  getRooms: () => call<{ rooms: Room[] }>('GET', '/rooms').then(({ rooms }) => Promise.all(rooms.map(fixRoom))),
+  getRoom: (id: string) => call<Room>('GET', `/rooms/${id}`).then(fixRoom),
+  claim: (id: string) => call<Room>('POST', `/rooms/${id}/claim`).then(fixRoom),
+  checkIn: (id: string) => call<Room>('POST', `/rooms/${id}/checkin`).then(fixRoom),
+  end: (id: string) => call<Room>('POST', `/rooms/${id}/end`).then(fixRoom),
+  myReservations: () =>
+    call<{ reservations: (Omit<Reservation, 'user' | 'checked_in'> & { status: string })[] }>(
+      'GET',
+      '/reservations?mine=true',
+    ).then(({ reservations }) =>
+      reservations.map((r): Reservation => ({ ...r, user: '', checked_in: r.status === 'checked_in' })),
+    ),
   reserve: (room_id: string, start: number, end: number) =>
     call<Reservation>('POST', '/reservations', { room_id, start, end }),
   cancel: (res_id: string) => call<void>('DELETE', `/reservations/${res_id}`),
