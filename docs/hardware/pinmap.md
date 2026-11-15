@@ -47,3 +47,41 @@ this document and the code cannot drift silently.
 Both CPUs: 16 MB QSPI flash, 264 KB SRAM, 125 MHz stock. This BSP runs them at
 200 MHz — see the clock invariant in [AGENTS.md](../../AGENTS.md), which also
 covers why `clk_peri` must be pinned to `clk_sys`.
+
+## The main-CPU IO header (physical connector)
+
+`docs/hardware/freewili-og-io-header.png` is a top-view drawing of the 20-pin
+header on the main CPU breakout, with the room-node pins highlighted. The pin
+numbers and functions below it are the vendor's published header table; GPIOnn
+values are the same ones asserted in the tables above.
+
+![Main-CPU IO header](freewili-og-io-header.png)
+
+Even pins are the top row, odd pins the bottom row, pin 1 at bottom-left, and
+the key/notch sits at the top edge between pins 10 and 12.
+
+| Pin | Signal | Pin | Signal |
+|---|---|---|---|
+| 1 | SPI1 CS (GPIO13) | 2 | **5V out** |
+| 3 | **GPIO27 out** | 4 | **V PINS IN** |
+| 5 | UART1 RX (GPIO9) | 6 | **3.3V out** |
+| 7 | UART1 CTS (GPIO10) | 8 | **I2C0 SCL (GPIO17)** |
+| 9 | UART1 TX (GPIO8) | 10 | **I2C0 SDA (GPIO16)** |
+| 11 | UART1 RTS (GPIO11) | 12 | SPI1 RX (GPIO12) |
+| 13 | SPI1 TX (GPIO15) | 14 | GPIO26 in |
+| 15 | SPI1 SCLK (GPIO14) | 16 | SWCLK |
+| 17 | GPIO25 out | 18 | SWDIO |
+| 19 | **GND** | 20 | **GND** |
+
+Three things that bite on this header:
+
+- **Pin 4 (`V PINS IN`) is the field-side supply for both buffers.** The GPIO
+  pins go through an `SN74LXC1T45` and the I2C pair through a `PCA9517`; both
+  need a voltage on pin 4 before anything on the header works. Jumper 4–6 for
+  3.3 V parts, or 2–4 for 5 V. The Orca Maestro module's "VIO Select" jumper
+  is exactly this, so removing the module and wiring straight to the header
+  silently disables the whole bus until pin 4 is fed.
+- **The `PCA9517` is a repeater, not a pull-up.** Keep the sensor breakout's
+  own pull-ups, or add 4.7 kΩ to 3.3 V on SDA and SCL.
+- **Only pins 19 and 20 are ground**, and neither is adjacent to the I2C pair.
+  Use both, one routed with the I2C bundle.

@@ -1,5 +1,5 @@
 /* Link to the ESP32-C6 on breakout UART1 (GPIO 8 TX / 9 RX / 10 CTS / 11 RTS),
- * 3 Mbaud, JSON lines both ways.
+ * 115200 baud, JSON lines both ways.
  *
  * Hardware flow control is on from this side: the main CPU pulls the C6's CTS
  * up and drives its RTS. The C6 side deliberately runs without hardware flow
@@ -19,8 +19,8 @@
 #include "room_state.h"
 
 #define ESP_UART       uart1
-#define ESP_UART_BAUD  3000000u
-#define ESP_LINE_MAX   192u
+#define ESP_UART_BAUD  115200u
+#define ESP_LINE_MAX   448u
 
 typedef struct {
     /* Latest published room status. `status_valid` stays false until the C6
@@ -29,6 +29,7 @@ typedef struct {
     bool        status_valid;
     room_state_t state;
     char        holder[48];
+    char        qr_url[192];
     int64_t     expires_at;
     int64_t     next_res_start;
 
@@ -46,6 +47,19 @@ typedef struct {
     bool        alert_valid;
     char        alert[48];
     uint8_t     alert_level;   /* ROOM_ALERT_* */
+
+    /* Receive-path evidence. These counters deliberately live beside the
+     * decoded state so one periodic diagnostic can distinguish no wire data,
+     * framing damage, parser rejection and successfully accepted messages. */
+    uint32_t    rx_bytes;
+    uint32_t    rx_lines;
+    uint32_t    rx_malformed;
+    uint32_t    rx_overlong;
+    uint32_t    rx_status;
+    uint32_t    rx_net;
+    uint32_t    rx_time;
+    uint32_t    rx_other;
+    uint8_t     rx_error_flags; /* sticky UART UARTRSR OE/BE/PE/FE bits */
 } esp_link_in_t;
 
 /* Starts UART1 and selects the pin functions. The expander direction word is
@@ -60,5 +74,6 @@ void esp_link_poll(esp_link_in_t *in);
 void esp_link_send_presence(bool present);
 void esp_link_send_hb(uint32_t up_s, bool present);
 void esp_link_send_boot(const char *fw_version);
+void esp_link_send_end(void);
 
 #endif

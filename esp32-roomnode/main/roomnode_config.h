@@ -21,51 +21,68 @@
 #ifndef WIFI_SSID
 #  define WIFI_SSID     "unset-copy-roomnode_secrets.h.example"
 #  define WIFI_PASSWORD ""
-#  define API_TOKEN     "PLACEHOLDER-COGNITO-ID-TOKEN"
 #endif
 
 /* ---- Wi-Fi station -------------------------------------------------- */
 /* WIFI_SSID / WIFI_PASSWORD come from roomnode_secrets.h above. */
 
 /* ---- Bench HTTP proxy ----------------------------------------------
- * The bench network has no direct route out; everything goes through this
- * proxy as an absolute-URI request. Set USE_PROXY 0 on a normal network.
+ * The C6 is the only thing on the tether's 192.168.49.x network, and the only
+ * route off it is this proxy -- so every call is CONNECT-tunnelled. net.c does
+ * the tunnel by hand; neither esp_http_client nor esp-tls can be told about a
+ * proxy.
  *
- * Only plain HTTP is proxied this way. An https:// API_BASE through the proxy
- * needs a CONNECT tunnel, which this client does not implement -- it says so
- * and fails loudly rather than silently hanging. */
+ * It also resolves names for us, which is load-bearing: the tether hands out no
+ * working resolver, so a direct connection cannot even find the gateway.
+ *
+ * Set USE_PROXY 0 on a normal network with direct egress. */
 #define USE_PROXY       1
 #define PROXY_HOST      "192.168.49.1"
 #define PROXY_PORT      8228
 
 /* ---- API ------------------------------------------------------------
- * PLACEHOLDER base URL. Deliberately http:// so the proxy path above works
- * today; switch to https:// (and add the tunnel) once the real gateway URL
- * exists. */
-#define API_BASE        "http://api.example.invalid/v1"
-/* API_TOKEN comes from roomnode_secrets.h. */
+ * The real gateway (Room Lock API, Nov 2026), HTTPS only.
+ *
+ * Device auth is the x-device-key header, NOT a Cognito token: this box is a
+ * fixture, not a user. The key comes from roomnode_secrets.h. */
+#define API_BASE        "https://6526ig971l.execute-api.us-east-2.amazonaws.com"
 #define ROOM_ID         "1"
 
-/* The reservation link this room's QR points at. Not the API. */
-#define QR_URL          "https://main.d24j7edplzktpl.amplifyapp.com/r/1"
+/* Device credential, sent as x-device-key. Committed on purpose: it is the
+ * shared dev key for this build, and a key that has to be copied by hand turns
+ * a fresh checkout into a silent 403 that looks like a network fault. For a
+ * production key, define it in roomnode_secrets.h instead -- this default is
+ * guarded, so the secrets value wins. */
+#ifndef DEVICE_KEY
+#  define DEVICE_KEY "testkey"
+#endif
+
+/* The QR destination comes only from the room GET response's `url` field. */
 
 /* ---- Timing ---------------------------------------------------------
- * POLL_MS is the device's heartbeat: one GET /rooms/1 per period, which is
- * also how servo/alert commands arrive. 2 s is well inside anything AWS
- * charges for and far faster than a door needs. */
-#define POLL_MS         2000
+ * The guide asks for a GET every 5 s; this runs at 1 s because that poll is
+ * also how servo and alert commands arrive, so it is the latency of every other
+ * behaviour here, and 1 request/s is well inside what the endpoint tolerates. */
+#define POLL_MS         1000
 #define WIFI_RETRY_MS   5000
 
-/* Presence must persist this long before it counts, and stay away this long
- * before the room is reported empty. Both are the main CPU's job; the C6 only
- * forwards what it is told. Kept here so the number is visible in one place. */
-#define PRESENT_DEBOUNCE_S  2
-#define ABSENT_TIMEOUT_S    30
+/* Fail secure independently of display state: after this long without a
+ * successful room GET, command the door locked. */
+#define OFFLINE_LOCK_MS 60000
+
+/* Presence is re-posted on every change AND this often, so one dropped POST
+ * cannot make the server conclude the room is empty. The guide says 60 s; 5 s
+ * costs one small POST per poll and makes a lost one invisible. */
+#define PRESENCE_RESEND_MS  5000
+
+/* Presence debounce and absence hold are enforced by the main RP2040; the C6
+ * receives only the resulting boolean belief. */
 
 /* ---- Link to the main CPU -------------------------------------------
  * UART0 on the C6's GPIO16 (TX) / GPIO17 (RX) is the wire into the main CPU's
- * breakout UART1: main GPIO9 RX <- 16, main GPIO8 TX -> 17. 3 Mbaud 8N1, the
- * rate apps/espuart established.
+ * breakout UART1: main GPIO9 RX <- 16, main GPIO8 TX -> 17. 115200 baud 8N1.
+ * The control traffic is only a few lines every five seconds; this rate gives
+ * main's 32-byte UART FIFO enough service margin without an IRQ-driven queue.
  *
  * Hardware flow control is deliberately OFF on this side: the main CPU pulls
  * its CTS input up, so it always has clear-to-send, and our lines are tiny at
@@ -74,4 +91,4 @@
 #define LINK_UART_NUM   0
 #define LINK_TX_GPIO    16
 #define LINK_RX_GPIO    17
-#define LINK_BAUD       3000000
+#define LINK_BAUD       115200
