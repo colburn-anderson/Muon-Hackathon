@@ -105,6 +105,21 @@ class Run(unittest.TestCase):
         self.assertNotIn("poem", json.dumps(fmt))
         self.assertEqual(fmt["result"], {"error": "I need the room id."})
 
+    def test_router_is_told_the_full_date_so_it_cannot_guess_the_year(self):
+        self.run_agent("list_rooms")
+        prompt = self.brt.calls[0]["system"][0]["text"]
+        self.assertIn("Saturday 2026-11-14 21:30 EST", prompt)
+        self.assertIn("quarter hour started at 21:30", prompt)
+
+    def test_off_grid_booking_is_asked_about_not_sent_to_the_api(self):
+        self.run_agent("book", {"room_id": "2", "day": "2026-11-15", "start": "15:10", "end": "16:00"})
+        self.assertEqual(self.api.calls, [])
+        self.assertIn("Which start and end time", self.brt.formatter_input()["result"]["error"])
+
+    def test_presence_is_hidden_from_the_formatter(self):
+        self.run_agent("room_status", {"room_id": "2"})
+        self.assertNotIn("presence", self.brt.formatter_input()["result"])
+
     def test_book_converts_local_time(self):
         self.run_agent("book", {"room_id": "Room 2", "day": "2026-11-15", "start": "15:00", "end": "16:00"})
         self.assertEqual(self.api.calls[0], ("POST", "/reservations",
