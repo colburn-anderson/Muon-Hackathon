@@ -23,6 +23,20 @@ export interface Reservation {
   status?: string;
 }
 
+export interface AdminSession {
+  res_id: string;
+  user: string; // Cognito username
+  kind: 'soft' | 'hard'; // walk-up session or checked-in booking
+  started_at: number; // epoch seconds
+  expires_at: number; // epoch seconds, the next extension point
+}
+
+export interface AdminView {
+  seconds_per_minute: number; // 60 = real time
+  rules: Record<string, number>; // each rule's current length in seconds
+  rooms: { room_id: string; presence: boolean; session: AdminSession | null }[];
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -50,6 +64,14 @@ const clock = (sec: number) => new Date(sec * 1000).toLocaleTimeString([], { hou
 export async function currentUserEmail(): Promise<string> {
   const user = await getCurrentUser();
   return user.signInDetails?.loginId ?? user.username;
+}
+
+// Members of the Cognito "admin" group see the admin page. The API checks the same group,
+// so this only decides whether to show the link.
+export async function isAdmin(): Promise<boolean> {
+  if (USING_MOCK) return true;
+  const groups = (await fetchAuthSession()).tokens?.idToken?.payload['cognito:groups'];
+  return Array.isArray(groups) && groups.includes('admin');
 }
 
 /* ---------- real backend (used when VITE_API_URL is set) ---------- */
@@ -87,6 +109,10 @@ const real = {
   cancel: async (res_id: string) => {
     await call<unknown>('DELETE', `/reservations/${res_id}`);
   },
+  admin: () => call<AdminView>('GET', '/admin'),
+  adminEnd: (id: string) => call<AdminView>('POST', `/admin/rooms/${id}/end`),
+  adminSpeed: (seconds_per_minute: number) =>
+    call<AdminView>('POST', '/admin/settings', { seconds_per_minute }),
   agent: async (message: string, history: ChatMessage[]) => {
     try {
       return await call<{ reply: string }>('POST', '/agent', { message, history });
@@ -204,7 +230,42 @@ async function mockAgent(message: string, _history: ChatMessage[]): Promise<{ re
   };
 }
 
+// shortcut: the demo speed dial is only displayed; the fake backend's own timers don't use it.
+let mockSpeed = 60;
+
+async function mockAdmin(): Promise<AdminView> {
+  const r = (minutes: number) => Math.round(minutes * mockSpeed);
+  return {
+    seconds_per_minute: mockSpeed,
+    rules: { extension_step: r(5), empty_room_timeout: r(10), reserved_lead: r(10), no_show: r(10), warning: r(5), early_checkin: r(5) },
+    rooms: rooms.map((room) => ({
+      room_id: room.room_id,
+      presence: false,
+      session:
+        room.holderEmail && room.expires_at
+          ? { res_id: `s_${room.room_id}`, user: room.holderEmail, kind: room.kind ?? 'soft', started_at: now(), expires_at: room.expires_at }
+          : null,
+    })),
+  };
+}
+
 const mock = {
+  admin: mockAdmin,
+  adminEnd: async (id: string) => {
+    const room = findRoom(id);
+    if (!room.holderEmail) throw new ApiError(`Room ${id} has no session`, 409);
+    room.holderEmail = undefined;
+    room.expires_at = null;
+    room.kind = undefined;
+    return mockAdmin();
+  },
+  adminSpeed: async (seconds_per_minute: number) => {
+    if (!(seconds_per_minute >= 1 && seconds_per_minute <= 60)) {
+      throw new ApiError('Seconds_per_minute must be between 1 and 60', 400);
+    }
+    mockSpeed = seconds_per_minute;
+    return mockAdmin();
+  },
   getRooms: async () => {
     const me = await currentUserEmail();
     return rooms.map((r) => update(r, me));

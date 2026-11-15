@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Routes, Route, Link, NavLink, useParams } from 'react-router-dom';
 import { Authenticator } from '@aws-amplify/ui-react';
-import { api, SLOT, toSlot, USING_MOCK, type ChatMessage, type Reservation, type Room, type RoomState } from './api';
+import {
+  api,
+  isAdmin,
+  SLOT,
+  toSlot,
+  USING_MOCK,
+  type AdminView,
+  type ChatMessage,
+  type Reservation,
+  type Room,
+  type RoomState,
+} from './api';
 import './App.css';
 
 /* ---------- helpers ---------- */
@@ -368,6 +379,129 @@ function MyBookingsPage() {
   );
 }
 
+const seconds = (n: number) => (n % 60 ? `${n} s` : `${n / 60} min`);
+
+function AdminLink() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    isAdmin()
+      .then(setShow)
+      .catch(() => setShow(false));
+  }, []);
+  return show ? <NavLink to="/admin">Admin</NavLink> : null;
+}
+
+function AdminPage() {
+  const [view, setView] = useState<AdminView | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const [tenMin, setTenMin] = useState(''); // how many seconds a 10-minute rule should last
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setView(await api.admin());
+    } catch (e) {
+      setNote({ tone: 'error', text: msg(e) });
+    }
+  }, []);
+  usePolling(load);
+
+  async function run(action: () => Promise<AdminView>, done: string) {
+    setBusy(true);
+    try {
+      setView(await action());
+      setNote({ tone: 'ok', text: done });
+    } catch (e) {
+      setNote({ tone: 'error', text: msg(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setSpeed(s: number) {
+    if (!(s >= 10 && s <= 600)) return setNote({ tone: 'error', text: 'Pick between 10 and 600 seconds.' });
+    run(() => api.adminSpeed(s / 10), `10-minute rules now last ${seconds(s)}.`);
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <h1>Admin</h1>
+        <p className="muted">End any session, and speed up the room rules for testing.</p>
+      </div>
+      {note && <Notice tone={note.tone}>{note.text}</Notice>}
+      {!view && !note && <p className="muted">Loading...</p>}
+      {view && (
+        <>
+          <form
+            className="card"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setSpeed(Number(tenMin));
+            }}
+          >
+            <h2>Rule speed</h2>
+            <p className="muted">
+              A 10-minute rule (check-in window, reserved lead, empty-room timeout) lasts{' '}
+              <strong>{seconds(view.rules.no_show)}</strong> right now. Sessions extend every{' '}
+              {seconds(view.rules.extension_step)}. Bookings stay on 15-minute slots.
+            </p>
+            <label className="field">
+              <span>10 minutes should last (seconds)</span>
+              <input
+                type="number"
+                min={10}
+                max={600}
+                value={tenMin}
+                placeholder={String(view.rules.no_show)}
+                onChange={(e) => setTenMin(e.target.value)}
+              />
+            </label>
+            <div className="chips">
+              {[30, 60, 600].map((s) => (
+                <button type="button" key={s} className="chip" disabled={busy} onClick={() => setSpeed(s)}>
+                  {s === 600 ? 'Real time' : seconds(s)}
+                </button>
+              ))}
+            </div>
+            <button className="btn primary" disabled={busy || !tenMin}>
+              Save
+            </button>
+          </form>
+
+          <h2>Sessions</h2>
+          {view.rooms.map((r) => (
+            <div key={r.room_id} className="card booking">
+              <div className="booking-when">
+                <strong>Room {r.room_id}</strong>
+                <span className="muted">
+                  {r.session
+                    ? `${r.session.kind === 'hard' ? 'Booking' : 'Walk-up'} by ${r.session.user.slice(0, 8)}, since ${clock(r.session.started_at)}, extends at ${clock(r.session.expires_at)}`
+                    : 'No session'}
+                  {r.presence ? ' · sensor sees someone' : ''}
+                </span>
+              </div>
+              {r.session && (
+                <button
+                  className="btn danger small"
+                  disabled={busy}
+                  onClick={() => {
+                    if (window.confirm(`End the session in room ${r.room_id}? Whoever holds it loses the room.`)) {
+                      run(() => api.adminEnd(r.room_id), `Ended the session in room ${r.room_id}.`);
+                    }
+                  }}
+                >
+                  End session
+                </button>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
 const SUGGESTIONS = [
   'Is anything free right now?',
   'Book room 2 tomorrow at 3pm for an hour',
@@ -464,6 +598,7 @@ export default function App() {
                 </NavLink>
                 <NavLink to="/rooms">Rooms</NavLink>
                 <NavLink to="/me">My bookings</NavLink>
+                <AdminLink />
               </nav>
               <button className="btn ghost small" onClick={signOut} title={me}>
                 Sign out
@@ -478,6 +613,7 @@ export default function App() {
                 <Route path="/r/:roomId" element={<RoomPage />} />
                 <Route path="/r/:roomId/checkout" element={<RoomPage checkout />} />
                 <Route path="/me" element={<MyBookingsPage />} />
+                <Route path="/admin" element={<AdminPage />} />
               </Routes>
             </main>
           </div>
