@@ -206,6 +206,7 @@ button:disabled {
 
 .shell {
   min-height: 100vh;
+  min-height: 100dvh; /* phones: ignore the collapsing address bar */
 }
 
 .topbar {
@@ -255,6 +256,11 @@ button:disabled {
   border-radius: 999px;
   font-weight: 700;
   font-size: 16px;
+  white-space: nowrap;
+}
+
+.narrow-only {
+  display: none;
 }
 
 .nav a.active {
@@ -313,7 +319,7 @@ button:disabled {
 
 .room-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   row-gap: 34px;
 }
 
@@ -487,6 +493,7 @@ button:disabled {
 
 .field input {
   width: 100%;
+  font-size: 16px; /* under 16px, iPhones zoom the page in when the field is tapped */
   padding: 12px 14px;
   border-radius: 14px;
   border: 2.5px solid var(--deep);
@@ -514,6 +521,10 @@ button:disabled {
   color: var(--gold);
 }
 
+.chip.on:disabled {
+  opacity: 1; /* the current choice: selected, not greyed out */
+}
+
 /* ---------- bookings: door-hanger tags with a punched hole ---------- */
 
 .booking {
@@ -524,7 +535,7 @@ button:disabled {
   gap: 12px;
   flex-wrap: wrap;
   padding-left: 64px;
-  border-radius: 999px 22px 22px 999px;
+  border-radius: 60px 22px 22px 60px; /* stays a tag when the text wraps on phones */
 }
 
 .booking::before {
@@ -615,15 +626,22 @@ button:disabled {
   color: var(--deep-soft);
 }
 
+.chat-end {
+  scroll-margin-bottom: 96px; /* room for the sticky message box */
+}
+
 .chat-input {
-  position: sticky;
-  bottom: 16px;
   display: flex;
   gap: 8px;
   padding: 6px;
   background: var(--paper);
   color: var(--deep);
   border-radius: 999px;
+}
+
+.chat-input.docked {
+  position: sticky;
+  bottom: 16px;
 }
 
 .chat-input input {
@@ -688,8 +706,9 @@ button:disabled {
 
   .nav a {
     flex: 1;
+    min-width: 0;
     text-align: center;
-    padding: 10px 6px;
+    padding: 10px 4px;
     font-size: 15px;
   }
 
@@ -701,8 +720,24 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .chat-input {
-    bottom: 88px;
+  .chat-input.docked {
+    bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+
+  .chat-log {
+    min-height: 0; /* short phones: keep the message box on the first screen */
+  }
+
+  .chat-end {
+    scroll-margin-bottom: 180px; /* message box and tab bar */
+  }
+
+  .wide-only {
+    display: none;
+  }
+
+  .narrow-only {
+    display: inline;
   }
 
   /* keep the main button on screen when someone lands here from a QR code */
@@ -717,6 +752,25 @@ button:disabled {
 
   .hero h1 {
     font-size: 44px;
+  }
+}
+
+/* the narrowest phones (320px) */
+@media (max-width: 360px) {
+  .nav a {
+    font-size: 13px;
+  }
+
+  .brand {
+    font-size: 19px;
+  }
+}
+
+/* touch screens: buttons big enough for a thumb */
+@media (pointer: coarse) {
+  .btn.small,
+  .chip {
+    min-height: 44px;
   }
 }
 

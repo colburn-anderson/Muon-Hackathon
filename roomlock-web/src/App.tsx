@@ -568,7 +568,8 @@ function AssistantPage() {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // block 'end' plus the CSS scroll margin keeps the newest message above the message box
+    if (messages.length || busy) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, busy]);
 
   async function send(text: string) {
@@ -598,25 +599,26 @@ function AssistantPage() {
         <div className="bubble assistant">
           I can check which rooms are free, book one for you, and show or cancel your bookings. What do you need?
         </div>
+        {messages.length === 0 && (
+          <div className="chips">
+            {SUGGESTIONS.map((s) => (
+              <button key={s} type="button" className="chip" onClick={() => send(s)}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
         {messages.map((m, i) => (
           <div key={i} className={`bubble ${m.role}`}>
             {m.content}
           </div>
         ))}
         {busy && <div className="bubble assistant typing">Thinking...</div>}
-        <div ref={endRef} />
+        <div ref={endRef} className="chat-end" />
       </div>
-      {messages.length === 0 && (
-        <div className="chips">
-          {SUGGESTIONS.map((s) => (
-            <button key={s} type="button" className="chip" onClick={() => send(s)}>
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
       <form
-        className="chat-input"
+        // pinned to the bottom only once there is a conversation; before that it sits under the suggestions
+        className={`chat-input${messages.length ? ' docked' : ''}`}
         onSubmit={(e) => {
           e.preventDefault();
           send(input);
@@ -650,7 +652,10 @@ export default function App() {
                   Assistant
                 </NavLink>
                 <NavLink to="/rooms">Rooms</NavLink>
-                <NavLink to="/me">My bookings</NavLink>
+                <NavLink to="/me">
+                  <span className="wide-only">My bookings</span>
+                  <span className="narrow-only">Bookings</span>
+                </NavLink>
                 <AdminLink />
               </nav>
               <button className="btn ghost small" onClick={signOut} title={me}>
